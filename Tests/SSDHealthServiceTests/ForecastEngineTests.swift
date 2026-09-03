@@ -140,6 +140,7 @@ final class ForecastEngineTests: XCTestCase {
         XCTAssertEqual(forecast.dailyWriteRateLifetimeGB, 144.0, accuracy: 0.01)
         XCTAssertEqual(forecast.primaryDailyWriteRateGB, 144.0, accuracy: 0.01)
         XCTAssertEqual(forecast.degradationStatus, .insufficientData)
+        XCTAssertEqual(forecast.lifespanFormatted, "Estimating...")
     }
 
     // MARK: - Dual Lifespan Extrapolation Models (Model A vs Model B)
