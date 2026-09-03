@@ -1,0 +1,12 @@
+# Xcode / Swift Package Manager
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+*.profraw
+*.profdata
+*.swp
+*.xcuserdatad
+xcuserdata/
+dist/
+.agents/
