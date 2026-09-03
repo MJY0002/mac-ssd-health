@@ -18,7 +18,7 @@ public enum DegradationStatus: String, Codable, Sendable, CaseIterable {
     public var title: String {
         switch self {
         case .insufficientData:
-            return "Estimating..."
+            return "Collecting Data"
         case .stable:
             return "Stable"
         case .moderateWear:
@@ -36,7 +36,7 @@ public enum DegradationStatus: String, Codable, Sendable, CaseIterable {
     public var detailedDescription: String {
         switch self {
         case .insufficientData:
-            return "Collecting historical write samples for accurate projection."
+            return "Collecting historical write samples (minimum 3 samples over ~24h) for accurate projection."
         case .stable:
             return "Healthy wear pattern. Projected lifespan exceeds 5 years."
         case .moderateWear:
@@ -147,7 +147,9 @@ public struct SSDForecastResult: Codable, Sendable, Equatable {
 
     /// Formatted estimated lifespan string (e.g. "~12.4 Years" or "Exhausted").
     public var lifespanFormatted: String {
-        if degradationStatus == .exceededEndurance || estimatedDaysRemaining <= 0 {
+        if degradationStatus == .insufficientData {
+            return "Estimating..."
+        } else if degradationStatus == .exceededEndurance || estimatedDaysRemaining <= 0 {
             return "Endurance Exceeded"
         } else if estimatedDaysRemaining.isInfinite || estimatedYearsRemaining > 100 {
             return "Infinite (> 100 Years)"

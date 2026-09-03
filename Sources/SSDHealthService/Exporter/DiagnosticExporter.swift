@@ -31,8 +31,8 @@ public final class DiagnosticExporter: DiagnosticExporting, Sendable {
         var root: [String: Any] = [:]
         root["metadata"] = [
             "exportTimestamp": isoFormatter.string(from: now),
-            "appVersion": "1.0.0",
-            "buildNumber": "100",
+            "appVersion": "1.1.0",
+            "buildNumber": "110",
             "macOSVersion": "14.5.0",
             "hardwareModel": "Apple Silicon Mac",
             "architecture": "arm64"
@@ -146,7 +146,7 @@ public final class DiagnosticExporter: DiagnosticExporting, Sendable {
         out += "================================================================================\n"
         out += "                    macOS SSD HEALTH & SMART DIAGNOSTIC REPORT\n"
         out += "================================================================================\n"
-        out += "Generated: \(formatter.string(from: now)) | App Version: 1.0.0 (Build 100)\n"
+        out += "Generated: \(formatter.string(from: now)) | App Version: 1.1.0 (Build 110)\n"
         out += "Host System: Apple Silicon Mac (arm64) | OS: macOS 14+\n\n"
 
         out += "--------------------------------------------------------------------------------\n"
