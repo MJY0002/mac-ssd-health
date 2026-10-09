@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 import AppKit
 import SSDHealthCore
 import SSDHealthService
@@ -9,6 +10,7 @@ public struct SettingsView: View {
     @State private var showPurgeConfirmation: Bool = false
     @State private var exportStatusMessage: String?
     @State private var exportIsError: Bool = false
+    @State private var loginItemError: String?
     @State private var customTBWString: String = ""
 
     public init(appState: AppState) {
@@ -110,8 +112,44 @@ public struct SettingsView: View {
                         appState.updatePollingInterval(Double(newValue) * 60.0)
                     }
                 }
+
+                GridRow {
+                    Text("Startup:")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Launch at Login", isOn: Binding(
+                            get: { appState.settings.launchAtLogin },
+                            set: { setLaunchAtLogin($0) }
+                        ))
+                        .font(.system(size: 12))
+                        if let error = loginItemError {
+                            Text(error)
+                                .font(.system(size: 11))
+                                .foregroundColor(.red)
+                        }
+                    }
+                }
             }
         }
+        .onAppear {
+            // The user can remove the login item in System Settings; reflect the real state
+            appState.settings.launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            loginItemError = nil
+        } catch {
+            loginItemError = "Could not update login item: \(error.localizedDescription)"
+        }
+        appState.settings.launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
     // MARK: - Section 2: Alert Thresholds
