@@ -68,8 +68,8 @@ public final class AppState: @unchecked Sendable {
         mockReader: MockSSDStorageReader = MockSSDStorageReader(),
         liveReader: IOKitStorageReader = IOKitStorageReader(),
         forecastEngine: any ForecastEngineProtocol = ForecastEngine(),
-        persistence: any HistoryPersistenceProtocol = HistoryPersistenceActor(),
-        notificationService: NotificationService = NotificationService.shared,
+        persistence: (any HistoryPersistenceProtocol)? = nil,
+        notificationService: NotificationService? = nil,
         diagnosticExporter: any DiagnosticExporting = DiagnosticExporter(),
         settings: AppSettings? = nil
     ) {
@@ -77,8 +77,8 @@ public final class AppState: @unchecked Sendable {
         self.mockReader = mockReader
         self.liveReader = liveReader
         self.forecastEngine = forecastEngine
-        self.persistence = persistence
-        self.notificationService = notificationService
+        self.persistence = persistence ?? Self.defaultPersistence()
+        self.notificationService = notificationService ?? Self.defaultNotificationService()
         self.diagnosticExporter = diagnosticExporter
         self.settings = resolvedSettings
 
@@ -89,6 +89,28 @@ public final class AppState: @unchecked Sendable {
         } else {
             self.storageReader = liveReader
         }
+    }
+
+    // MARK: - Default Dependencies
+
+    /// Under XCTest, defaults must never touch the user's real history file or alert state.
+    private static var isRunningUnitTests: Bool {
+        NSClassFromString("XCTestCase") != nil
+    }
+
+    /// One scratch history file per test process, shared like the real file would be.
+    private static let testHistoryURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("SSDHealthTests-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        .appendingPathComponent("history.json")
+
+    private static func defaultPersistence() -> any HistoryPersistenceProtocol {
+        isRunningUnitTests ? HistoryPersistenceActor(storageURL: testHistoryURL) : HistoryPersistenceActor()
+    }
+
+    private static func defaultNotificationService() -> NotificationService {
+        isRunningUnitTests
+            ? NotificationService(cooldownManager: AlertCooldownManager(userDefaults: nil), notificationCenter: nil)
+            : NotificationService.shared
     }
 
     // MARK: - Lifecycle & Data Loading
