@@ -174,6 +174,56 @@ public final class AlertCooldownManager: @unchecked Sendable {
         persistState()
     }
 
+    // MARK: - Atomic check-and-record
+    //
+    // The separate check/record calls above take the lock twice, so concurrent evaluations
+    // can both pass the check and fire the same alert. These variants decide under one lock.
+
+    /// Returns `true` and records the trigger if `key` is out of cooldown.
+    public func tryTrigger(key: String, cooldownSeconds: TimeInterval, now: Date = Date()) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if let last = state.lastTriggeredTimestamps[key], now.timeIntervalSince(last) < cooldownSeconds {
+            return false
+        }
+        state.lastTriggeredTimestamps[key] = now
+        persistState()
+        return true
+    }
+
+    /// Returns `true` and acknowledges the milestone if it had not been acknowledged yet.
+    public func tryAcknowledgeWearMilestone(_ milestone: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let inserted = state.lastAcknowledgedMilestones.insert(milestone).inserted
+        if inserted {
+            persistState()
+        }
+        return inserted
+    }
+
+    /// Updates the per-drive media error baseline and returns `true` if this reading should alert:
+    /// a different drive with existing errors, or the same drive with a higher count.
+    public func recordMediaErrors(_ count: UInt64, driveID: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let lastDrive = state.lastMediaErrorsDriveID
+        let lastCount = state.lastMediaErrors
+        let shouldAlert: Bool
+        if let lastDrive, lastDrive != driveID {
+            shouldAlert = count > 0
+        } else {
+            // Same drive (or first reading): alert only on growth; a drop rebases silently
+            shouldAlert = count > lastCount
+        }
+        if count != lastCount || lastDrive != driveID {
+            state.lastMediaErrors = count
+            state.lastMediaErrorsDriveID = driveID
+            persistState()
+        }
+        return shouldAlert
+    }
+
     public func reset() {
         lock.lock()
         defer { lock.unlock() }

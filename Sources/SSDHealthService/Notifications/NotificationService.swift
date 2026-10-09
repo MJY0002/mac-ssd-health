@@ -158,8 +158,7 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
         // 1. Thermal Alerts
         let extremeThreshold = max(70.0, tempCritThreshold + 5.0)
         if metrics.temperatureCelsius >= extremeThreshold {
-            if cooldownManager.shouldTrigger(key: "temp_ext", cooldownSeconds: 600.0, now: now) {
-                cooldownManager.recordTrigger(key: "temp_ext", now: now)
+            if cooldownManager.tryTrigger(key: "temp_ext", cooldownSeconds: 600.0, now: now) {
                 triggered.append(AlertEvent(
                     ruleKey: "temp_ext",
                     title: "Extreme SSD Temperature",
@@ -170,8 +169,7 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
                 ))
             }
         } else if metrics.temperatureCelsius >= tempCritThreshold {
-            if cooldownManager.shouldTrigger(key: "temp_crit", cooldownSeconds: 900.0, now: now) {
-                cooldownManager.recordTrigger(key: "temp_crit", now: now)
+            if cooldownManager.tryTrigger(key: "temp_crit", cooldownSeconds: 900.0, now: now) {
                 triggered.append(AlertEvent(
                     ruleKey: "temp_crit",
                     title: "Critical SSD Temperature",
@@ -182,8 +180,7 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
                 ))
             }
         } else if metrics.temperatureCelsius >= tempWarnThreshold {
-            if cooldownManager.shouldTrigger(key: "temp_warn", cooldownSeconds: 1800.0, now: now) {
-                cooldownManager.recordTrigger(key: "temp_warn", now: now)
+            if cooldownManager.tryTrigger(key: "temp_warn", cooldownSeconds: 1800.0, now: now) {
                 triggered.append(AlertEvent(
                     ruleKey: "temp_warn",
                     title: "Elevated SSD Temperature",
@@ -199,8 +196,7 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
         let firstMilestone = min(100, max(1, wearWarnThreshold))
         let milestones = Set([firstMilestone, 90, 95, 100].filter { $0 >= firstMilestone }).sorted()
         for m in milestones where metrics.wearPercentage >= m {
-            if cooldownManager.shouldTriggerWearMilestone(m) {
-                cooldownManager.acknowledgeWearMilestone(m)
+            if cooldownManager.tryAcknowledgeWearMilestone(m) {
                 let severity: AlertSeverity = (m >= 95 ? .emergency : (m >= 90 ? .critical : .warning))
                 triggered.append(AlertEvent(
                     ruleKey: "wear_m_\(m)",
@@ -215,8 +211,7 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
 
         // 3. Spare Capacity Alerts
         if metrics.availableSparePercent <= 5 {
-            if cooldownManager.shouldTrigger(key: "spare_crit", cooldownSeconds: 43200.0, now: now) {
-                cooldownManager.recordTrigger(key: "spare_crit", now: now)
+            if cooldownManager.tryTrigger(key: "spare_crit", cooldownSeconds: 43200.0, now: now) {
                 triggered.append(AlertEvent(
                     ruleKey: "spare_crit",
                     title: "Emergency: Available Spare Depleted",
@@ -227,8 +222,7 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
                 ))
             }
         } else if metrics.availableSparePercent < spareWarnThreshold || metrics.criticalWarnings.contains(.availableSpareBelowThreshold) {
-            if cooldownManager.shouldTrigger(key: "spare_low", cooldownSeconds: 86400.0, now: now) {
-                cooldownManager.recordTrigger(key: "spare_low", now: now)
+            if cooldownManager.tryTrigger(key: "spare_low", cooldownSeconds: 86400.0, now: now) {
                 triggered.append(AlertEvent(
                     ruleKey: "spare_low",
                     title: "Available Spare Below Threshold",
@@ -242,8 +236,7 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
 
         // 4. Critical Warning Bitmask Flags
         if metrics.criticalWarnings.contains(.reliabilityDegraded) {
-            if cooldownManager.shouldTrigger(key: "crit_reliability", cooldownSeconds: 86400.0, now: now) {
-                cooldownManager.recordTrigger(key: "crit_reliability", now: now)
+            if cooldownManager.tryTrigger(key: "crit_reliability", cooldownSeconds: 86400.0, now: now) {
                 triggered.append(AlertEvent(
                     ruleKey: "crit_reliability",
                     title: "NVM Subsystem Reliability Degraded",
@@ -256,8 +249,7 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
         }
 
         if metrics.criticalWarnings.contains(.readOnly) {
-            if cooldownManager.shouldTrigger(key: "crit_readonly", cooldownSeconds: 86400.0, now: now) {
-                cooldownManager.recordTrigger(key: "crit_readonly", now: now)
+            if cooldownManager.tryTrigger(key: "crit_readonly", cooldownSeconds: 86400.0, now: now) {
                 triggered.append(AlertEvent(
                     ruleKey: "crit_readonly",
                     title: "SSD Locked in Read-Only Mode",
@@ -270,8 +262,7 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
         }
 
         if metrics.criticalWarnings.contains(.volatileMemoryBackupFailed) {
-            if cooldownManager.shouldTrigger(key: "crit_backup", cooldownSeconds: 86400.0, now: now) {
-                cooldownManager.recordTrigger(key: "crit_backup", now: now)
+            if cooldownManager.tryTrigger(key: "crit_backup", cooldownSeconds: 86400.0, now: now) {
                 triggered.append(AlertEvent(
                     ruleKey: "crit_backup",
                     title: "Volatile Memory Backup Failed",
@@ -284,31 +275,15 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
         }
 
         // 5. Media Errors Delta (baseline is per drive)
-        let driveID = metrics.id
-        let lastErrors = cooldownManager.lastMediaErrorCount()
-        let lastDrive = cooldownManager.lastMediaErrorDriveID()
-        let mediaErrorEvent = AlertEvent(
-            ruleKey: "media_errors",
-            title: "Media Integrity Errors Detected",
-            message: "\(metrics.mediaErrors) uncorrectable media data integrity errors recorded.",
-            severity: .critical,
-            timestamp: now,
-            rawCode: "MEDIA_ERRORS_DETECTED: \(metrics.mediaErrors)"
-        )
-        if let lastDrive, lastDrive != driveID {
-            // Different drive: the old baseline says nothing about it; report any errors it already has
-            cooldownManager.updateMediaErrorCount(metrics.mediaErrors, driveID: driveID)
-            if metrics.mediaErrors > 0 {
-                triggered.append(mediaErrorEvent)
-            }
-        } else if metrics.mediaErrors < lastErrors {
-            // Counter went down on the same drive (stale state): rebase silently so new errors are detected again
-            cooldownManager.updateMediaErrorCount(metrics.mediaErrors, driveID: driveID)
-        } else if metrics.mediaErrors > lastErrors {
-            cooldownManager.updateMediaErrorCount(metrics.mediaErrors, driveID: driveID)
-            triggered.append(mediaErrorEvent)
-        } else if lastDrive == nil {
-            cooldownManager.updateMediaErrorCount(metrics.mediaErrors, driveID: driveID)
+        if cooldownManager.recordMediaErrors(metrics.mediaErrors, driveID: metrics.id) {
+            triggered.append(AlertEvent(
+                ruleKey: "media_errors",
+                title: "Media Integrity Errors Detected",
+                message: "\(metrics.mediaErrors) uncorrectable media data integrity errors recorded.",
+                severity: .critical,
+                timestamp: now,
+                rawCode: "MEDIA_ERRORS_DETECTED: \(metrics.mediaErrors)"
+            ))
         }
 
         return triggered
