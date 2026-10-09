@@ -72,11 +72,15 @@ public enum HealthStatus: String, Codable, Sendable {
         }
     }
 
-    public static func evaluate(metrics: SSDHealthMetrics?) -> HealthStatus {
+    public static func evaluate(
+        metrics: SSDHealthMetrics?,
+        thermalWarningCelsius: Double = 55.0,
+        thermalCriticalCelsius: Double = 65.0
+    ) -> HealthStatus {
         guard let m = metrics else { return .good }
-        if !m.criticalWarnings.isClean || m.healthScorePercent <= 10 || m.availableSparePercent < m.availableSpareThresholdPercent || m.temperatureCelsius >= 65.0 {
+        if !m.criticalWarnings.isClean || m.healthScorePercent <= 10 || m.availableSparePercent < m.availableSpareThresholdPercent || m.temperatureCelsius >= thermalCriticalCelsius {
             return .critical
-        } else if m.healthScorePercent <= 20 || m.availableSparePercent < 20 || m.temperatureCelsius >= 55.0 {
+        } else if m.healthScorePercent <= 20 || m.availableSparePercent < 20 || m.temperatureCelsius >= thermalWarningCelsius {
             return .warning
         } else {
             return .good

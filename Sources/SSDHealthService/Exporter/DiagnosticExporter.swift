@@ -31,11 +31,11 @@ public final class DiagnosticExporter: DiagnosticExporting, Sendable {
         var root: [String: Any] = [:]
         root["metadata"] = [
             "exportTimestamp": isoFormatter.string(from: now),
-            "appVersion": "1.1.0",
-            "buildNumber": "110",
-            "macOSVersion": "14.5.0",
-            "hardwareModel": "Apple Silicon Mac",
-            "architecture": "arm64"
+            "appVersion": SystemInfo.appVersion,
+            "buildNumber": SystemInfo.buildNumber,
+            "macOSVersion": SystemInfo.macOSVersion,
+            "hardwareModel": SystemInfo.hardwareModel,
+            "architecture": SystemInfo.architecture
         ]
 
         root["drive"] = [
@@ -146,8 +146,8 @@ public final class DiagnosticExporter: DiagnosticExporting, Sendable {
         out += "================================================================================\n"
         out += "                    macOS SSD HEALTH & SMART DIAGNOSTIC REPORT\n"
         out += "================================================================================\n"
-        out += "Generated: \(formatter.string(from: now)) | App Version: 1.1.0 (Build 110)\n"
-        out += "Host System: Apple Silicon Mac (arm64) | OS: macOS 14+\n\n"
+        out += "Generated: \(formatter.string(from: now)) | App Version: \(SystemInfo.appVersion) (Build \(SystemInfo.buildNumber))\n"
+        out += "Host System: \(SystemInfo.hardwareModel) (\(SystemInfo.architecture)) | OS: macOS \(SystemInfo.macOSVersion)\n\n"
 
         out += "--------------------------------------------------------------------------------\n"
         out += "1. STORAGE DEVICE IDENTIFICATION\n"
@@ -204,5 +204,40 @@ public final class DiagnosticExporter: DiagnosticExporting, Sendable {
         forecast: SSDForecastResult?
     ) -> String {
         exportTextReport(metrics: metrics, history: history, forecast: forecast, ratedTBW: 300.0, now: Date())
+    }
+}
+
+/// Runtime host and bundle information for diagnostic exports.
+enum SystemInfo {
+    static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+    }
+
+    static var buildNumber: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+    }
+
+    static var macOSVersion: String {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        return "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+    }
+
+    /// Hardware model identifier, e.g. "Mac14,2".
+    static var hardwareModel: String {
+        var size = 0
+        guard sysctlbyname("hw.model", nil, &size, nil, 0) == 0, size > 0 else { return "unknown" }
+        var buffer = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("hw.model", &buffer, &size, nil, 0) == 0 else { return "unknown" }
+        return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    static var architecture: String {
+        #if arch(arm64)
+        return "arm64"
+        #elseif arch(x86_64)
+        return "x86_64"
+        #else
+        return "unknown"
+        #endif
     }
 }

@@ -24,6 +24,10 @@ public struct DashboardView: View {
         } detail: {
             // Detail Content
             VStack(spacing: 0) {
+                if appState.isFallbackData || appState.settings.useMockReader {
+                    dataSourceBanner
+                }
+
                 switch appState.selectedTab {
                 case .overview:
                     overviewView
@@ -43,6 +47,25 @@ public struct DashboardView: View {
             }
         }
         .frame(minWidth: 800, minHeight: 560)
+    }
+
+    // MARK: - Data Source Banner
+
+    /// Warns that the shown values are not live SMART data and are excluded from history and alerts.
+    private var dataSourceBanner: some View {
+        let isDemo = appState.settings.useMockReader
+        return HStack(spacing: 8) {
+            Image(systemName: isDemo ? "testtube.2" : "exclamationmark.triangle.fill")
+            Text(isDemo
+                 ? "Demo data active. Values are simulated and are not recorded to history or alerts."
+                 : "SMART access unavailable. Health, temperature and spare values are placeholders; history, forecast and alerts are paused.")
+                .font(.system(size: 12, weight: .medium))
+            Spacer()
+        }
+        .foregroundColor(.orange)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.12))
     }
 
     // MARK: - Overview Tab View

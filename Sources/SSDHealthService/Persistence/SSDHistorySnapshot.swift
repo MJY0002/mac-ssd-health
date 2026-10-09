@@ -159,7 +159,7 @@ public extension Array where Element == SSDHistorySnapshot {
                 }
             } else {
                 // Tier 4: Retain 1 sample per week (> 365d)
-                let weekBucket = calendar.component(.weekOfYear, from: t) + calendar.component(.yearForWeekOfYear, from: t) * 52
+                let weekBucket = calendar.component(.weekOfYear, from: t) + calendar.component(.yearForWeekOfYear, from: t) * 54
                 if weekBucket != lastKeptWeekBucket {
                     result.append(sample)
                     lastKeptWeekBucket = weekBucket

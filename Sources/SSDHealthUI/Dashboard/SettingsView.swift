@@ -189,8 +189,43 @@ public struct SettingsView: View {
                     }
                     .frame(width: 260)
                 }
+
+                GridRow {
+                    Text("Rated Endurance:")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    HStack {
+                        TextField("Auto", text: $customTBWString)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 90)
+                            .onSubmit { applyTBWOverride() }
+                        Text("TBW")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        Button("Apply") { applyTBWOverride() }
+                            .controlSize(.small)
+                    }
+                    .frame(width: 260, alignment: .leading)
+                }
             }
         }
+        .onAppear {
+            customTBWString = appState.settings.ratedTBWOverride.map { String(format: "%.0f", $0) } ?? ""
+        }
+    }
+
+    /// Empty input clears the override (endurance is then derived from the drive's wear counter).
+    private func applyTBWOverride() {
+        let trimmed = customTBWString.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+        if trimmed.isEmpty {
+            appState.settings.ratedTBWOverride = nil
+        } else if let value = Double(trimmed), value > 0, value.isFinite {
+            appState.settings.ratedTBWOverride = value
+        } else {
+            customTBWString = appState.settings.ratedTBWOverride.map { String(format: "%.0f", $0) } ?? ""
+            return
+        }
+        appState.recalculateForecast()
     }
 
     // MARK: - Section 3: Driver & Mock Simulation

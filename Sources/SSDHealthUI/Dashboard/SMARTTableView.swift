@@ -74,14 +74,8 @@ public struct SMARTTableView: View {
     }
 
     public var allRows: [SMARTParameterRow] {
+        // No raw log means SMART is unreachable; never show synthesized values as hardware data
         guard let log = appState.rawSmartLog else {
-            // Fallback rows from metrics if log is nil
-            if let metrics = appState.currentMetrics {
-                let synData = MockSSDStorageReader.generateSyntheticRawData(for: metrics)
-                if let synLog = NVMESmartLog(data: synData) {
-                    return buildRows(from: synLog)
-                }
-            }
             return []
         }
         return buildRows(from: log)
@@ -225,9 +219,11 @@ public struct SMARTTableView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 32))
                 .foregroundColor(.secondary)
-            Text("No SMART Parameters Found")
+            Text(appState.rawSmartLog == nil ? "SMART Log Unavailable" : "No SMART Parameters Found")
                 .font(.system(size: 14, weight: .semibold))
-            Text("Try changing search keywords or resetting the status filter.")
+            Text(appState.rawSmartLog == nil
+                 ? "The NVMe SMART log could not be read from the drive."
+                 : "Try changing search keywords or resetting the status filter.")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
         }

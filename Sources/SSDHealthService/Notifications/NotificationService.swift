@@ -15,6 +15,10 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
     public let cooldownManager: AlertCooldownManager
     private let notificationCenter: UNUserNotificationCenter?
 
+    /// Invoked when the user clicks a notification or one of its actions.
+    /// Parameters: action identifier, category identifier.
+    public var onNotificationResponse: ((String, String) -> Void)?
+
     public static var isRunningInsideAppBundle: Bool {
         Bundle.main.bundleURL.pathExtension.lowercased() == "app"
     }
@@ -31,6 +35,28 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
         self.cooldownManager = cooldownManager
         self.notificationCenter = notificationCenter
         super.init()
+        // Without a delegate, banners are suppressed while the app is active and actions are dropped
+        notificationCenter?.delegate = self
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    // Async variants: their imported signature is stable across SDKs, unlike the completion-handler
+    // forms whose @Sendable annotation changed and would silently stop matching the optional requirement.
+    public func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound, .list]
+    }
+
+    public func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        let action = response.actionIdentifier
+        guard action != UNNotificationDismissActionIdentifier else { return }
+        onNotificationResponse?(action, response.notification.request.content.categoryIdentifier)
     }
 
     /// Requests user authorization for macOS notifications.
@@ -130,7 +156,8 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
         var triggered: [AlertEvent] = []
 
         // 1. Thermal Alerts
-        if metrics.temperatureCelsius >= 70.0 {
+        let extremeThreshold = max(70.0, tempCritThreshold + 5.0)
+        if metrics.temperatureCelsius >= extremeThreshold {
             if cooldownManager.shouldTrigger(key: "temp_ext", cooldownSeconds: 600.0, now: now) {
                 cooldownManager.recordTrigger(key: "temp_ext", now: now)
                 triggered.append(AlertEvent(
@@ -169,7 +196,8 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
         }
 
         // 2. Wear Milestone Alerts (One-shot per milestone)
-        let milestones = [80, 90, 95, 100]
+        let firstMilestone = min(100, max(1, wearWarnThreshold))
+        let milestones = Set([firstMilestone, 90, 95, 100].filter { $0 >= firstMilestone }).sorted()
         for m in milestones where metrics.wearPercentage >= m {
             if cooldownManager.shouldTriggerWearMilestone(m) {
                 cooldownManager.acknowledgeWearMilestone(m)
@@ -257,7 +285,10 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
 
         // 5. Media Errors Delta
         let lastErrors = cooldownManager.lastMediaErrorCount()
-        if metrics.mediaErrors > lastErrors {
+        if metrics.mediaErrors < lastErrors {
+            // Counter went down (drive replaced, stale state): rebase silently so new errors are detected again
+            cooldownManager.updateMediaErrorCount(metrics.mediaErrors)
+        } else if metrics.mediaErrors > lastErrors {
             cooldownManager.updateMediaErrorCount(metrics.mediaErrors)
             triggered.append(AlertEvent(
                 ruleKey: "media_errors",

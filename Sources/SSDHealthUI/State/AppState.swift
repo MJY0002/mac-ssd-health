@@ -59,6 +59,7 @@ public final class AppState: @unchecked Sendable {
     // Polling State
     private var pollingTask: Task<Void, Never>?
     private var isPollingActive: Bool = false
+    private var inFlightFetch: Task<Void, Never>?
 
     // MARK: - Initializer
 
@@ -123,23 +124,40 @@ public final class AppState: @unchecked Sendable {
         isRefreshing = false
     }
 
+    /// Demo data and registry fallback placeholders must never reach the persisted history
+    /// or the persisted alert state, otherwise they corrupt forecasts and suppress real alerts.
+    private func isTrustedTelemetry(_ metrics: SSDHealthMetrics) -> Bool {
+        !settings.useMockReader && !metrics.isFallbackData
+    }
+
+    /// Polling, initial load and manual refresh share this path. Runs are serialized (not dropped),
+    /// so two callers never interleave reads, history writes and alert evaluation.
     private func fetchTelemetryAndSync(recordSnapshot: Bool) async {
+        let previous = inFlightFetch
+        let task = Task {
+            await previous?.value
+            await self.performFetch(recordSnapshot: recordSnapshot)
+        }
+        inFlightFetch = task
+        await task.value
+    }
+
+    private func performFetch(recordSnapshot: Bool) async {
         do {
             // 1. Read Health Metrics
             let metrics = try await storageReader.readHealthMetrics()
             self.currentMetrics = metrics
+            let trusted = isTrustedTelemetry(metrics)
 
-            // 2. Read Raw SMART Log
-            do {
-                self.rawSmartLog = try await storageReader.readRawSmartLog()
-            } catch {
-                // Synthesize raw log if direct raw read fails
-                let syntheticData = MockSSDStorageReader.generateSyntheticRawData(for: metrics)
-                self.rawSmartLog = NVMESmartLog(data: syntheticData)
+            // 2. Read Raw SMART Log (nil when unavailable; never show fabricated raw data)
+            if metrics.isFallbackData {
+                self.rawSmartLog = nil
+            } else {
+                self.rawSmartLog = try? await storageReader.readRawSmartLog()
             }
 
             // 3. Record snapshot to persistence actor
-            if recordSnapshot {
+            if recordSnapshot && trusted {
                 let snapshot = SSDHistorySnapshot(from: metrics)
                 try? await persistence.record(snapshot: snapshot)
             }
@@ -148,16 +166,19 @@ public final class AppState: @unchecked Sendable {
             let loadedHistory = (try? await persistence.loadHistory()) ?? []
             self.history = loadedHistory
 
-            // 5. Calculate forecast
-            let forecastResult = forecastEngine.calculateForecast(
-                current: metrics,
-                history: loadedHistory,
-                ratedTBW: settings.ratedTBWOverride
-            )
-            self.forecast = forecastResult
+            // 5. Calculate forecast (placeholder fallback values cannot be extrapolated)
+            if metrics.isFallbackData {
+                self.forecast = nil
+            } else {
+                self.forecast = forecastEngine.calculateForecast(
+                    current: metrics,
+                    history: settings.useMockReader ? [] : loadedHistory,
+                    ratedTBW: settings.ratedTBWOverride
+                )
+            }
 
             // 6. Evaluate and dispatch notifications if enabled
-            if settings.showNotifications {
+            if settings.showNotifications && trusted {
                 await notificationService.evaluateAndDispatch(
                     metrics: metrics,
                     tempWarnThreshold: settings.thermalWarningThresholdCelsius,
@@ -222,10 +243,22 @@ public final class AppState: @unchecked Sendable {
         }
     }
 
+    /// Recomputes the forecast from the current reading and loaded history without polling hardware.
+    public func recalculateForecast() {
+        guard let metrics = currentMetrics, !metrics.isFallbackData else { return }
+        self.forecast = forecastEngine.calculateForecast(
+            current: metrics,
+            history: settings.useMockReader ? [] : history,
+            ratedTBW: settings.ratedTBWOverride
+        )
+        self.onStateChange?()
+    }
+
     // MARK: - History Management
 
     public func purgeHistory() async {
         try? await persistence.purgeAll()
+        notificationService.cooldownManager.reset()
         self.history = []
         if let metrics = currentMetrics {
             self.forecast = forecastEngine.calculateForecast(
@@ -243,7 +276,7 @@ public final class AppState: @unchecked Sendable {
         guard let metrics = currentMetrics else {
             throw NSError(domain: "SSDHealth", code: 404, userInfo: [NSLocalizedDescriptionKey: "No active metrics available to export."])
         }
-        let effectiveRatedTBW = settings.ratedTBWOverride ?? (Double(metrics.capacityBytes) / 1_000_000_000.0 * 0.6)
+        let effectiveRatedTBW = ForecastEngine.effectiveRatedTBW(for: metrics, override: settings.ratedTBWOverride)
         if let exp = diagnosticExporter as? DiagnosticExporter {
             return try exp.exportJSON(metrics: metrics, history: history, forecast: forecast, ratedTBW: effectiveRatedTBW, now: Date())
         }
@@ -258,7 +291,7 @@ public final class AppState: @unchecked Sendable {
         guard let metrics = currentMetrics else {
             return "No SSD metrics available."
         }
-        let effectiveRatedTBW = settings.ratedTBWOverride ?? (Double(metrics.capacityBytes) / 1_000_000_000.0 * 0.6)
+        let effectiveRatedTBW = ForecastEngine.effectiveRatedTBW(for: metrics, override: settings.ratedTBWOverride)
         if let exp = diagnosticExporter as? DiagnosticExporter {
             return exp.exportTextReport(metrics: metrics, history: history, forecast: forecast, ratedTBW: effectiveRatedTBW, now: Date())
         }
@@ -291,7 +324,11 @@ public final class AppState: @unchecked Sendable {
     }
 
     public var menuBarStatus: HealthStatus {
-        HealthStatus.evaluate(metrics: currentMetrics)
+        HealthStatus.evaluate(
+            metrics: currentMetrics,
+            thermalWarningCelsius: settings.thermalWarningThresholdCelsius,
+            thermalCriticalCelsius: settings.thermalCriticalThresholdCelsius
+        )
     }
 
     public var menuBarIconName: String {
