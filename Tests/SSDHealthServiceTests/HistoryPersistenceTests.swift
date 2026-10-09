@@ -68,7 +68,9 @@ final class HistoryPersistenceTests: XCTestCase {
 
         for i in 0..<5 {
             let s = makeSnapshot(offsetSeconds: Double(i) * 3600.0, tbw: 20.0 + Double(i) * 0.1)
-            try await actor.record(snapshot: s)
+            // Fixed reference: relative to the wall clock these fixed-date samples age into the
+            // one-per-day decimation tier and collapse, which made the test fail after a week
+            try await actor.record(snapshot: s, relativeTo: baseDate.addingTimeInterval(5 * 3600.0))
         }
 
         let loaded = try await actor.loadHistory()

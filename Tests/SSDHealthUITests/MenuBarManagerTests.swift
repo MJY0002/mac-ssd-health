@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import AppKit
 @testable import SSDHealthCore
 @testable import SSDHealthService
 @testable import SSDHealthUI
@@ -11,6 +12,9 @@ final class MenuBarManagerTests: XCTestCase {
     var userDefaults: UserDefaults!
 
     override func setUp() async throws {
+        // Status items and windows need a window server connection, which only exists once
+        // NSApplication is initialized; a bare xctest process otherwise aborts in CGSConnectionByID.
+        _ = NSApplication.shared
         try await super.setUp()
         let suiteName = "test.suite.menubar.\(UUID().uuidString)"
         userDefaults = UserDefaults(suiteName: suiteName)!
