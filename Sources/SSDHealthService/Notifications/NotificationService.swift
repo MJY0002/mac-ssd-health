@@ -283,21 +283,32 @@ public final class NotificationService: NSObject, UNUserNotificationCenterDelega
             }
         }
 
-        // 5. Media Errors Delta
+        // 5. Media Errors Delta (baseline is per drive)
+        let driveID = metrics.id
         let lastErrors = cooldownManager.lastMediaErrorCount()
-        if metrics.mediaErrors < lastErrors {
-            // Counter went down (drive replaced, stale state): rebase silently so new errors are detected again
-            cooldownManager.updateMediaErrorCount(metrics.mediaErrors)
+        let lastDrive = cooldownManager.lastMediaErrorDriveID()
+        let mediaErrorEvent = AlertEvent(
+            ruleKey: "media_errors",
+            title: "Media Integrity Errors Detected",
+            message: "\(metrics.mediaErrors) uncorrectable media data integrity errors recorded.",
+            severity: .critical,
+            timestamp: now,
+            rawCode: "MEDIA_ERRORS_DETECTED: \(metrics.mediaErrors)"
+        )
+        if let lastDrive, lastDrive != driveID {
+            // Different drive: the old baseline says nothing about it; report any errors it already has
+            cooldownManager.updateMediaErrorCount(metrics.mediaErrors, driveID: driveID)
+            if metrics.mediaErrors > 0 {
+                triggered.append(mediaErrorEvent)
+            }
+        } else if metrics.mediaErrors < lastErrors {
+            // Counter went down on the same drive (stale state): rebase silently so new errors are detected again
+            cooldownManager.updateMediaErrorCount(metrics.mediaErrors, driveID: driveID)
         } else if metrics.mediaErrors > lastErrors {
-            cooldownManager.updateMediaErrorCount(metrics.mediaErrors)
-            triggered.append(AlertEvent(
-                ruleKey: "media_errors",
-                title: "Media Integrity Errors Detected",
-                message: "\(metrics.mediaErrors) uncorrectable media data integrity errors recorded.",
-                severity: .critical,
-                timestamp: now,
-                rawCode: "MEDIA_ERRORS_DETECTED: \(metrics.mediaErrors)"
-            ))
+            cooldownManager.updateMediaErrorCount(metrics.mediaErrors, driveID: driveID)
+            triggered.append(mediaErrorEvent)
+        } else if lastDrive == nil {
+            cooldownManager.updateMediaErrorCount(metrics.mediaErrors, driveID: driveID)
         }
 
         return triggered

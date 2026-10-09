@@ -279,6 +279,30 @@ final class AdversarialNotificationAndExportTests: XCTestCase {
         XCTAssertEqual(a5.map { $0.ruleKey }, ["media_errors"])
     }
 
+    func testMediaErrors_BaselineIsPerDrive() {
+        let cooldownManager = AlertCooldownManager(userDefaults: nil)
+        let service = NotificationService(cooldownManager: cooldownManager, notificationCenter: nil)
+        let t0 = baseDate!
+
+        _ = service.evaluateAlertEvents(metrics: makeMetrics(serialNumber: "DRIVE-A", mediaErrors: 9), now: t0)
+
+        // Replacement drive already has 3 errors: fewer than A, but still news about this drive
+        let swapped = service.evaluateAlertEvents(metrics: makeMetrics(serialNumber: "DRIVE-B", mediaErrors: 3), now: t0.addingTimeInterval(60))
+        XCTAssertEqual(swapped.map { $0.ruleKey }, ["media_errors"])
+        XCTAssertEqual(cooldownManager.lastMediaErrorDriveID(), "DRIVE-B")
+
+        // Same drive, unchanged count: silent
+        let steady = service.evaluateAlertEvents(metrics: makeMetrics(serialNumber: "DRIVE-B", mediaErrors: 3), now: t0.addingTimeInterval(120))
+        XCTAssertTrue(steady.filter { $0.ruleKey == "media_errors" }.isEmpty)
+    }
+
+    func testAlertState_DecodesPersistedStateWithoutDriveID() throws {
+        let legacy = Data(#"{"lastTriggeredTimestamps":{},"lastAcknowledgedMilestones":[80],"lastMediaErrors":4}"#.utf8)
+        let state = try JSONDecoder().decode(AlertState.self, from: legacy)
+        XCTAssertEqual(state.lastMediaErrors, 4)
+        XCTAssertNil(state.lastMediaErrorsDriveID)
+    }
+
     func testWearMilestones_FollowUserWarningThreshold() {
         let cooldownManager = AlertCooldownManager(userDefaults: nil)
         let service = NotificationService(cooldownManager: cooldownManager, notificationCenter: nil)

@@ -78,15 +78,19 @@ public struct AlertState: Codable, Sendable, Equatable {
     public var lastTriggeredTimestamps: [String: Date] = [:]
     public var lastAcknowledgedMilestones: Set<Int> = []
     public var lastMediaErrors: UInt64 = 0
+    /// Drive the media error baseline belongs to (optional so older persisted state still decodes).
+    public var lastMediaErrorsDriveID: String? = nil
 
     public init(
         lastTriggeredTimestamps: [String: Date] = [:],
         lastAcknowledgedMilestones: Set<Int> = [],
-        lastMediaErrors: UInt64 = 0
+        lastMediaErrors: UInt64 = 0,
+        lastMediaErrorsDriveID: String? = nil
     ) {
         self.lastTriggeredTimestamps = lastTriggeredTimestamps
         self.lastAcknowledgedMilestones = lastAcknowledgedMilestones
         self.lastMediaErrors = lastMediaErrors
+        self.lastMediaErrorsDriveID = lastMediaErrorsDriveID
     }
 }
 
@@ -153,6 +157,20 @@ public final class AlertCooldownManager: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         state.lastMediaErrors = count
+        persistState()
+    }
+
+    public func lastMediaErrorDriveID() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return state.lastMediaErrorsDriveID
+    }
+
+    public func updateMediaErrorCount(_ count: UInt64, driveID: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        state.lastMediaErrors = count
+        state.lastMediaErrorsDriveID = driveID
         persistState()
     }
 
