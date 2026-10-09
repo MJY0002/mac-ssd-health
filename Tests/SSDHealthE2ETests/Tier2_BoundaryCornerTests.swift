@@ -1,6 +1,8 @@
 import Foundation
 import XCTest
 @testable import SSDHealthCore
+@testable import SSDHealthService
+@testable import SSDHealthUI
 
 /// Tier 2: Boundary Value Analysis & Corner Condition Test Suite (15 Features x >= 5 tests = >= 75 tests).
 /// Verifies extreme values, numerical overflows, underflows, truncated data, and edge conditions.

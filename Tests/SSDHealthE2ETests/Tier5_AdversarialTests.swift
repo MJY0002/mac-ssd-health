@@ -1,6 +1,8 @@
 import Foundation
 import XCTest
 @testable import SSDHealthCore
+@testable import SSDHealthService
+@testable import SSDHealthUI
 
 /// Tier 5: Adversarial Stress, Boundary Fuzzing & Memory Safety Test Suite.
 ///

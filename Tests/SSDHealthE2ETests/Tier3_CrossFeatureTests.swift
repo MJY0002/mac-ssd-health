@@ -1,6 +1,8 @@
 import Foundation
 import XCTest
 @testable import SSDHealthCore
+@testable import SSDHealthService
+@testable import SSDHealthUI
 
 /// Tier 3: Pairwise Cross-Feature Interaction Test Suite.
 /// Verifies end-to-end data pipelines and multi-module state transformations.
