@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import IOKit
 @testable import SSDHealthCore
 
 final class IOKitReaderTests: XCTestCase {
@@ -40,6 +41,32 @@ final class IOKitReaderTests: XCTestCase {
         XCTAssertFalse(meta.bsdName.isEmpty)
         XCTAssertFalse(meta.modelName.isEmpty)
         XCTAssertFalse(meta.interconnect.isEmpty)
+    }
+
+    /// Cross-checks the recursive registry search against an independent lookup: the BSD name it found
+    /// must resolve via IOBSDNameMatching to a whole-disk IOMedia whose Size equals the reported capacity.
+    /// Fails if the search stopped at a partition, at another device, or fell back to defaults.
+    func testRegistryMetadata_MatchesWholeDiskMediaOfSameDevice() throws {
+        let reader = IOKitStorageReader()
+        let meta = try reader.readRegistryMetadata()
+        print("IOKit primary device: bsd=\(meta.bsdName) model=\(meta.modelName) capacity=\(meta.capacityBytes) interconnect=\(meta.interconnect) liveSMART=\(reader.isLiveHardwareAccessAvailable())")
+
+        XCTAssertGreaterThan(meta.capacityBytes, 0, "Capacity must come from IOMedia, not a default")
+
+        guard let matching = IOBSDNameMatching(kIOMainPortDefault, 0, meta.bsdName) else {
+            return XCTFail("IOBSDNameMatching returned nil for \(meta.bsdName)")
+        }
+        let media = IOServiceGetMatchingService(kIOMainPortDefault, matching)
+        XCTAssertNotEqual(media, 0, "Reported BSD name \(meta.bsdName) must exist in IORegistry")
+        guard media != 0 else { return }
+        defer { IOObjectRelease(media) }
+
+        let whole = IORegistryEntryCreateCFProperty(media, "Whole" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? Bool
+        let size = (IORegistryEntryCreateCFProperty(media, "Size" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? NSNumber)?.uint64Value
+        XCTAssertEqual(whole, true, "\(meta.bsdName) must be the whole disk, not a partition")
+        XCTAssertEqual(size, meta.capacityBytes)
     }
 
     func testFallbackMetricsGeneration() throws {

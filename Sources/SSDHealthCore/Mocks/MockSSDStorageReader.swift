@@ -241,7 +241,7 @@ public final class MockSSDStorageReader: SSDStorageReading, @unchecked Sendable 
 
         bytes[0] = metrics.criticalWarnings.rawValue
 
-        let tempKelvin = UInt16(clamping: Int(round(metrics.temperatureCelsius + 273.15)))
+        let tempKelvin = UInt16(Self.clampedUInt64(metrics.temperatureCelsius + 273.15, max: Double(UInt16.max)))
         var tempKLE = tempKelvin.littleEndian
         withUnsafeBytes(of: &tempKLE) { raw in
             bytes[1] = raw[0]
@@ -252,8 +252,8 @@ public final class MockSSDStorageReader: SSDStorageReading, @unchecked Sendable 
         bytes[4] = UInt8(clamping: metrics.availableSpareThresholdPercent)
         bytes[5] = UInt8(clamping: metrics.wearPercentage)
 
-        let unitsWritten = UInt64(round((metrics.terabytesWritten * 1_000_000_000_000.0) / 512_000.0))
-        let unitsRead = UInt64(round((metrics.terabytesRead * 1_000_000_000_000.0) / 512_000.0))
+        let unitsWritten = Self.clampedUInt64((metrics.terabytesWritten * 1_000_000_000_000.0) / 512_000.0)
+        let unitsRead = Self.clampedUInt64((metrics.terabytesRead * 1_000_000_000_000.0) / 512_000.0)
 
         func writeUInt64(offset: Int, val: UInt64) {
             var v = val.littleEndian
@@ -277,5 +277,14 @@ public final class MockSSDStorageReader: SSDStorageReading, @unchecked Sendable 
         }
 
         return Data(bytes)
+    }
+
+    /// Rounds and clamps into `0...max`; NaN maps to 0. Plain `UInt64(_:)` traps on NaN, negatives and overflow.
+    private static func clampedUInt64(_ value: Double, max upper: Double = 18_446_744_073_709_549_568.0) -> UInt64 {
+        guard value.isFinite else { return value == .infinity ? UInt64(upper) : 0 }
+        let rounded = value.rounded()
+        if rounded <= 0 { return 0 }
+        if rounded >= upper { return UInt64(upper) }
+        return UInt64(rounded)
     }
 }

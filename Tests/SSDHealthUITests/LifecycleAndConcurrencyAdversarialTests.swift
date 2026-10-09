@@ -15,6 +15,9 @@ final class LifecycleAndConcurrencyAdversarialTests: XCTestCase {
     var settings: AppSettings!
 
     override func setUp() async throws {
+        // Status items and windows need a window server connection, which only exists once
+        // NSApplication is initialized; a bare xctest process otherwise aborts in CGSConnectionByID.
+        _ = NSApplication.shared
         try await super.setUp()
         let uniqueID = UUID().uuidString
         tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("AdvLifecycleTests_\(uniqueID)", isDirectory: true)

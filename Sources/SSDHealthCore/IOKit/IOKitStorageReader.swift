@@ -12,6 +12,12 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
 
     public init() {}
 
+    /// SMART page from the most recent `readHealthMetrics()`, so the `readRawSmartLog()` call that
+    /// follows in the same poll reuses it instead of issuing a second hardware command.
+    private let cacheLock = NSLock()
+    private var cachedLog: (log: NVMESmartLog, readAt: Date)?
+    private static let cacheLifetime: TimeInterval = 5.0
+
     // MARK: - Public API
 
     /// Returns `true` if native NVMe SMART UserClient hardware access is currently available.
@@ -26,9 +32,13 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
 
     /// Reads and parses the raw 512-byte NVMe SMART log page directly from hardware.
     public func readRawSmartLog() async throws -> NVMESmartLog {
-        let rawData = try readRawBytesFromHardware()
-        guard let log = NVMESmartLog(data: rawData) else {
-            throw StorageReaderError.invalidDataLength(expected: 512, actual: rawData.count)
+        if let cached = cacheLock.withLock({ cachedLog }),
+           Date().timeIntervalSince(cached.readAt) < Self.cacheLifetime {
+            return cached.log
+        }
+        let raw = try readRawBytesFromHardware()
+        guard let log = NVMESmartLog(data: raw.data) else {
+            throw StorageReaderError.invalidDataLength(expected: 512, actual: raw.data.count)
         }
         return log
     }
@@ -36,8 +46,14 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
     /// Reads consolidated SSD health metrics, combining SMART telemetry with registry metadata.
     public func readHealthMetrics() async throws -> SSDHealthMetrics {
         do {
-            let log = try await readRawSmartLog()
-            let registryInfo = try readRegistryMetadata()
+            let raw = try readRawBytesFromHardware()
+            guard let log = NVMESmartLog(data: raw.data) else {
+                throw StorageReaderError.invalidDataLength(expected: 512, actual: raw.data.count)
+            }
+            cacheLock.withLock { cachedLog = (log, Date()) }
+
+            // Metadata must come from the same device the SMART log was read from
+            let registryInfo = try readRegistryMetadata(registryEntryID: raw.registryEntryID)
 
             return SSDHealthMetrics(
                 bsdName: registryInfo.bsdName,
@@ -45,7 +61,7 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
                 serialNumber: registryInfo.serialNumber,
                 firmwareRevision: registryInfo.firmwareRevision,
                 interconnect: registryInfo.interconnect,
-                capacityBytes: registryInfo.capacityBytes > 0 ? registryInfo.capacityBytes : 256_000_000_000,
+                capacityBytes: registryInfo.capacityBytes,
                 healthScorePercent: log.healthScorePercent,
                 wearPercentage: Int(log.percentageUsed),
                 temperatureCelsius: log.temperatureCelsius,
@@ -70,7 +86,8 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
 
     // MARK: - Low-Level NVMe SMART UserClient Query via IOCFPlugIn
 
-    private func readRawBytesFromHardware() throws -> Data {
+    /// Reads the SMART page and returns it together with the registry entry ID of the device it came from.
+    private func readRawBytesFromHardware() throws -> (data: Data, registryEntryID: UInt64) {
         let matching = IOServiceMatching(IOKitKeys.blockStorageDeviceClass)
         var iterator: io_iterator_t = 0
         let kr = IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator)
@@ -79,15 +96,19 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
         }
         defer { IOObjectRelease(iterator) }
 
-        var service = IOIteratorNext(iterator)
+        // Try internal devices first so an external NVMe enclosure never shadows the boot SSD
+        var services: [io_service_t] = []
+        var next = IOIteratorNext(iterator)
+        while next != 0 {
+            services.append(next)
+            next = IOIteratorNext(iterator)
+        }
+        defer { services.forEach { _ = IOObjectRelease($0) } }
+        services.sort { Self.isInternal($0) && !Self.isInternal($1) }
+
         var lastError: StorageReaderError? = nil
 
-        while service != 0 {
-            defer {
-                IOObjectRelease(service)
-                service = IOIteratorNext(iterator)
-            }
-
+        for service in services {
             var plugInInterface: UnsafeMutablePointer<UnsafeMutablePointer<IOCFPlugInInterface>?>? = nil
             var score: Int32 = 0
 
@@ -136,7 +157,9 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
                 continue
             }
 
-            return Data(buffer)
+            var entryID: UInt64 = 0
+            _ = IORegistryEntryGetRegistryEntryID(service, &entryID)
+            return (Data(buffer), entryID)
         }
 
         if let err = lastError {
@@ -156,114 +179,152 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
         public var capacityBytes: UInt64 = 0
     }
 
+    /// Reads metadata of the internal storage device (first internal block device, else the first one found).
     public func readRegistryMetadata() throws -> RegistryMetadata {
+        guard let service = Self.primaryBlockStorageDevice() else {
+            return RegistryMetadata()
+        }
+        defer { IOObjectRelease(service) }
+        return Self.metadata(for: service)
+    }
+
+    /// Reads metadata of exactly the device identified by `registryEntryID`.
+    public func readRegistryMetadata(registryEntryID: UInt64) throws -> RegistryMetadata {
+        guard let matching = IORegistryEntryIDMatching(registryEntryID) else {
+            return try readRegistryMetadata()
+        }
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
+        guard service != 0 else {
+            return try readRegistryMetadata()
+        }
+        defer { IOObjectRelease(service) }
+        return Self.metadata(for: service)
+    }
+
+    private static func metadata(for service: io_service_t) -> RegistryMetadata {
         var meta = RegistryMetadata()
+
+        var unmanagedProps: Unmanaged<CFMutableDictionary>?
+        if IORegistryEntryCreateCFProperties(service, &unmanagedProps, kCFAllocatorDefault, 0) == KERN_SUCCESS,
+           let props = unmanagedProps?.takeRetainedValue() as? [String: Any] {
+            if let devChars = props[IOKitKeys.deviceCharacteristics] as? [String: Any] {
+                if let pName = devChars[IOKitKeys.productName] as? String, !pName.isEmpty {
+                    meta.modelName = pName.trimmingCharacters(in: .whitespaces)
+                }
+                if let sNum = devChars[IOKitKeys.serialNumber] as? String, !sNum.isEmpty {
+                    meta.serialNumber = sNum.trimmingCharacters(in: .whitespaces)
+                }
+                if let rev = devChars[IOKitKeys.productRevisionLevel] as? String, !rev.isEmpty {
+                    meta.firmwareRevision = rev.trimmingCharacters(in: .whitespaces)
+                }
+            }
+            if let protoChars = props[IOKitKeys.protocolCharacteristics] as? [String: Any] {
+                if let inter = protoChars[IOKitKeys.physicalInterconnect] as? String, !inter.isEmpty {
+                    meta.interconnect = inter
+                }
+            }
+        }
+
+        // Inspect parent controller node
+        var parent: io_registry_entry_t = 0
+        if IORegistryEntryGetParentEntry(service, kIOServicePlane, &parent) == KERN_SUCCESS {
+            var parentProps: Unmanaged<CFMutableDictionary>?
+            if IORegistryEntryCreateCFProperties(parent, &parentProps, kCFAllocatorDefault, 0) == KERN_SUCCESS,
+               let pprops = parentProps?.takeRetainedValue() as? [String: Any] {
+                if let mNum = pprops[IOKitKeys.modelNumber] as? String, meta.modelName == "Apple Internal SSD" {
+                    meta.modelName = mNum
+                }
+                if let sNum = pprops[IOKitKeys.serialNumber] as? String, meta.serialNumber.isEmpty {
+                    meta.serialNumber = sNum
+                }
+                if let rev = pprops[IOKitKeys.firmwareRevision] as? String, meta.firmwareRevision.isEmpty {
+                    meta.firmwareRevision = rev
+                }
+            }
+            IOObjectRelease(parent)
+        }
+
+        // IOMedia (BSD Name, Size) sits below the IOBlockStorageDriver child, so search recursively.
+        // The whole-disk IOMedia is the first hit in depth-first order, before any partition media.
+        let searchOptions = IOOptionBits(kIORegistryIterateRecursively)
+        if let bsd = IORegistryEntrySearchCFProperty(service, kIOServicePlane, IOKitKeys.bsdName as CFString, kCFAllocatorDefault, searchOptions) as? String,
+           !bsd.isEmpty {
+            meta.bsdName = bsd
+        }
+        if let size = IORegistryEntrySearchCFProperty(service, kIOServicePlane, IOKitKeys.size as CFString, kCFAllocatorDefault, searchOptions) as? NSNumber,
+           size.uint64Value > 0 {
+            meta.capacityBytes = size.uint64Value
+        }
+
+        return meta
+    }
+
+    /// Returns `true` if the device reports an internal physical interconnect location.
+    private static func isInternal(_ service: io_service_t) -> Bool {
+        guard let proto = IORegistryEntryCreateCFProperty(service, IOKitKeys.protocolCharacteristics as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? [String: Any] else {
+            return false
+        }
+        return (proto[IOKitKeys.physicalInterconnectLocation] as? String) == "Internal"
+    }
+
+    /// Returns a retained handle to the internal block storage device, or the first device if none reports internal.
+    private static func primaryBlockStorageDevice() -> io_service_t? {
         let matching = IOServiceMatching(IOKitKeys.blockStorageDeviceClass)
         var iterator: io_iterator_t = 0
         guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else {
-            return meta
+            return nil
         }
         defer { IOObjectRelease(iterator) }
 
+        var first: io_service_t? = nil
         var service = IOIteratorNext(iterator)
         while service != 0 {
-            defer {
+            if isInternal(service) {
+                if let f = first { _ = IOObjectRelease(f) }
+                return service
+            }
+            if first == nil {
+                first = service
+            } else {
                 IOObjectRelease(service)
-                service = IOIteratorNext(iterator)
             }
+            service = IOIteratorNext(iterator)
+        }
+        return first
+    }
 
-            var unmanagedProps: Unmanaged<CFMutableDictionary>?
-            if IORegistryEntryCreateCFProperties(service, &unmanagedProps, kCFAllocatorDefault, 0) == KERN_SUCCESS,
-               let props = unmanagedProps?.takeRetainedValue() as? [String: Any] {
-                if let devChars = props[IOKitKeys.deviceCharacteristics] as? [String: Any] {
-                    if let pName = devChars[IOKitKeys.productName] as? String, !pName.isEmpty {
-                        meta.modelName = pName
-                    }
-                    if let sNum = devChars[IOKitKeys.serialNumber] as? String, !sNum.isEmpty {
-                        meta.serialNumber = sNum
-                    }
-                    if let rev = devChars[IOKitKeys.productRevisionLevel] as? String, !rev.isEmpty {
-                        meta.firmwareRevision = rev
-                    }
-                }
-                if let protoChars = props[IOKitKeys.protocolCharacteristics] as? [String: Any] {
-                    if let inter = protoChars[IOKitKeys.physicalInterconnect] as? String, !inter.isEmpty {
-                        meta.interconnect = inter
-                    }
-                }
-            }
+    // MARK: - Graceful Fallback Telemetry (Non-Privileged / Sandbox)
 
-            // Inspect parent controller node
-            var parent: io_registry_entry_t = 0
-            if IORegistryEntryGetParentEntry(service, kIOServicePlane, &parent) == KERN_SUCCESS {
-                var parentProps: Unmanaged<CFMutableDictionary>?
-                if IORegistryEntryCreateCFProperties(parent, &parentProps, kCFAllocatorDefault, 0) == KERN_SUCCESS,
-                   let pprops = parentProps?.takeRetainedValue() as? [String: Any] {
-                    if let mNum = pprops[IOKitKeys.modelNumber] as? String, meta.modelName == "Apple Internal SSD" {
-                        meta.modelName = mNum
-                    }
-                    if let sNum = pprops[IOKitKeys.serialNumber] as? String, meta.serialNumber.isEmpty {
-                        meta.serialNumber = sNum
-                    }
-                    if let rev = pprops[IOKitKeys.firmwareRevision] as? String, meta.firmwareRevision.isEmpty {
-                        meta.firmwareRevision = rev
-                    }
-                }
-                IOObjectRelease(parent)
-            }
+    /// Builds placeholder metrics from IORegistry when SMART is unreachable.
+    ///
+    /// Health, temperature and spare values are placeholders, and the byte counters only cover the
+    /// time since boot. Callers must not persist, forecast or alert on these (`isFallbackData == true`).
+    public func readFallbackRegistryMetrics(underlyingError: Error) throws -> SSDHealthMetrics {
+        var meta = RegistryMetadata()
+        var bytesRead: UInt64 = 0
+        var bytesWritten: UInt64 = 0
 
-            // Inspect child media for BSD Name and Capacity Size
+        if let device = Self.primaryBlockStorageDevice() {
+            defer { IOObjectRelease(device) }
+            meta = Self.metadata(for: device)
+
+            // Driver statistics of this device only (the IOBlockStorageDriver is a direct child)
             var childIterator: io_iterator_t = 0
-            if IORegistryEntryGetChildIterator(service, kIOServicePlane, &childIterator) == KERN_SUCCESS {
+            if IORegistryEntryGetChildIterator(device, kIOServicePlane, &childIterator) == KERN_SUCCESS {
                 var child = IOIteratorNext(childIterator)
                 while child != 0 {
-                    var childProps: Unmanaged<CFMutableDictionary>?
-                    if IORegistryEntryCreateCFProperties(child, &childProps, kCFAllocatorDefault, 0) == KERN_SUCCESS,
-                       let cprops = childProps?.takeRetainedValue() as? [String: Any] {
-                        if let bsd = cprops[IOKitKeys.bsdName] as? String, !bsd.isEmpty {
-                            meta.bsdName = bsd
-                        }
-                        if let sz = cprops[IOKitKeys.size] as? UInt64, sz > 0 {
-                            meta.capacityBytes = sz
-                        }
+                    if IOObjectConformsTo(child, IOKitKeys.blockStorageDriverClass) != 0,
+                       let stats = IORegistryEntryCreateCFProperty(child, IOKitKeys.driverStatistics as CFString, kCFAllocatorDefault, 0)?
+                           .takeRetainedValue() as? [String: Any] {
+                        bytesRead += (stats[IOKitKeys.bytesRead] as? NSNumber)?.uint64Value ?? 0
+                        bytesWritten += (stats[IOKitKeys.bytesWritten] as? NSNumber)?.uint64Value ?? 0
                     }
                     IOObjectRelease(child)
                     child = IOIteratorNext(childIterator)
                 }
                 IOObjectRelease(childIterator)
             }
-        }
-        return meta
-    }
-
-    // MARK: - Graceful Fallback Telemetry (Non-Privileged / Sandbox)
-
-    public func readFallbackRegistryMetrics(underlyingError: Error) throws -> SSDHealthMetrics {
-        let meta = try readRegistryMetadata()
-
-        var bytesRead: UInt64 = 0
-        var bytesWritten: UInt64 = 0
-        var readErrors: UInt64 = 0
-        var writeErrors: UInt64 = 0
-
-        let matching = IOServiceMatching(IOKitKeys.blockStorageDriverClass)
-        var iterator: io_iterator_t = 0
-        if IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS {
-            var driver = IOIteratorNext(iterator)
-            while driver != 0 {
-                var unmanagedProps: Unmanaged<CFMutableDictionary>?
-                if IORegistryEntryCreateCFProperties(driver, &unmanagedProps, kCFAllocatorDefault, 0) == KERN_SUCCESS,
-                   let props = unmanagedProps?.takeRetainedValue() as? [String: Any],
-                   let stats = props[IOKitKeys.driverStatistics] as? [String: Any] {
-                    bytesRead += (stats[IOKitKeys.bytesRead] as? UInt64) ?? 0
-                    bytesWritten += (stats[IOKitKeys.bytesWritten] as? UInt64) ?? 0
-                    readErrors += (stats[IOKitKeys.errorsRead] as? UInt64) ?? 0
-                    writeErrors += (stats[IOKitKeys.errorsWrite] as? UInt64) ?? 0
-                }
-                IOObjectRelease(driver)
-                driver = IOIteratorNext(iterator)
-            }
-            IOObjectRelease(iterator)
         }
 
         let tbWritten = Double(bytesWritten) / 1_000_000_000_000.0
@@ -275,10 +336,10 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
             serialNumber: meta.serialNumber.isEmpty ? "REGISTRY-FALLBACK" : meta.serialNumber,
             firmwareRevision: meta.firmwareRevision.isEmpty ? "N/A" : meta.firmwareRevision,
             interconnect: meta.interconnect,
-            capacityBytes: meta.capacityBytes > 0 ? meta.capacityBytes : 256_000_000_000,
-            healthScorePercent: 100, // Non-intrusive fallback baseline
+            capacityBytes: meta.capacityBytes,
+            healthScorePercent: 100, // Placeholder, not measured
             wearPercentage: 0,
-            temperatureCelsius: 38.0, // Ambient baseline
+            temperatureCelsius: 38.0, // Placeholder, not measured
             availableSparePercent: 100,
             availableSpareThresholdPercent: 10,
             terabytesWritten: tbWritten,
@@ -286,7 +347,8 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
             powerOnHours: 0,
             powerCycles: 0,
             unsafeShutdowns: 0,
-            mediaErrors: readErrors + writeErrors,
+            // Driver I/O errors are not NVMe media errors and reset on reboot; never report them as such
+            mediaErrors: 0,
             errorLogEntries: 0,
             criticalWarnings: CriticalWarningFlags(rawValue: 0),
             timestamp: Date(),

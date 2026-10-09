@@ -61,7 +61,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SSDHealthE2ETests",
-            dependencies: ["SSDHealthCore", "SSDHealthService"],
+            dependencies: ["SSDHealthCore", "SSDHealthService", "SSDHealthUI"],
             path: "Tests/SSDHealthE2ETests"
         ),
         .testTarget(

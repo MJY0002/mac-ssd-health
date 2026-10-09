@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🔨 Compiling release binary for macOS (arm64/x86_64)..."
+echo "🔨 Compiling release binary for macOS (host architecture: $(uname -m))..."
 swift build -c release
 
 APP_NAME="SSD Health"

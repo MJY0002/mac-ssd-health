@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 import AppKit
 import SSDHealthCore
 import SSDHealthService
@@ -8,6 +9,8 @@ public struct SettingsView: View {
     @Bindable public var appState: AppState
     @State private var showPurgeConfirmation: Bool = false
     @State private var exportStatusMessage: String?
+    @State private var exportIsError: Bool = false
+    @State private var loginItemError: String?
     @State private var customTBWString: String = ""
 
     public init(appState: AppState) {
@@ -109,8 +112,44 @@ public struct SettingsView: View {
                         appState.updatePollingInterval(Double(newValue) * 60.0)
                     }
                 }
+
+                GridRow {
+                    Text("Startup:")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Launch at Login", isOn: Binding(
+                            get: { appState.settings.launchAtLogin },
+                            set: { setLaunchAtLogin($0) }
+                        ))
+                        .font(.system(size: 12))
+                        if let error = loginItemError {
+                            Text(error)
+                                .font(.system(size: 11))
+                                .foregroundColor(.red)
+                        }
+                    }
+                }
             }
         }
+        .onAppear {
+            // The user can remove the login item in System Settings; reflect the real state
+            appState.settings.launchAtLogin = SMAppService.mainApp.status == .enabled
+        }
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            loginItemError = nil
+        } catch {
+            loginItemError = "Could not update login item: \(error.localizedDescription)"
+        }
+        appState.settings.launchAtLogin = SMAppService.mainApp.status == .enabled
     }
 
     // MARK: - Section 2: Alert Thresholds
@@ -129,8 +168,9 @@ public struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                     HStack {
-                        Slider(value: $appState.settings.thermalWarningThresholdCelsius, in: 40...75, step: 1)
-                        Text("\(Int(appState.settings.thermalWarningThresholdCelsius)) °C")
+                        // Warning must stay below critical
+                        Slider(value: $appState.settings.thermalWarningThresholdCelsius, in: 40...max(41, min(75, appState.settings.thermalCriticalThresholdCelsius - 1)), step: 1)
+                        Text(appState.settings.temperatureUnit.formatRounded(celsius: appState.settings.thermalWarningThresholdCelsius))
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .frame(width: 50, alignment: .trailing)
                     }
@@ -142,8 +182,8 @@ public struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                     HStack {
-                        Slider(value: $appState.settings.thermalCriticalThresholdCelsius, in: 55...90, step: 1)
-                        Text("\(Int(appState.settings.thermalCriticalThresholdCelsius)) °C")
+                        Slider(value: $appState.settings.thermalCriticalThresholdCelsius, in: min(89, max(55, appState.settings.thermalWarningThresholdCelsius + 1))...90, step: 1)
+                        Text(appState.settings.temperatureUnit.formatRounded(celsius: appState.settings.thermalCriticalThresholdCelsius))
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .frame(width: 50, alignment: .trailing)
                     }
@@ -189,8 +229,43 @@ public struct SettingsView: View {
                     }
                     .frame(width: 260)
                 }
+
+                GridRow {
+                    Text("Rated Endurance:")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    HStack {
+                        TextField("Auto", text: $customTBWString)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 90)
+                            .onSubmit { applyTBWOverride() }
+                        Text("TBW")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        Button("Apply") { applyTBWOverride() }
+                            .controlSize(.small)
+                    }
+                    .frame(width: 260, alignment: .leading)
+                }
             }
         }
+        .onAppear {
+            customTBWString = appState.settings.ratedTBWOverride.map { String(format: "%.0f", $0) } ?? ""
+        }
+    }
+
+    /// Empty input clears the override (endurance is then derived from the drive's wear counter).
+    private func applyTBWOverride() {
+        let trimmed = customTBWString.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: ".")
+        if trimmed.isEmpty {
+            appState.settings.ratedTBWOverride = nil
+        } else if let value = Double(trimmed), value > 0, value.isFinite {
+            appState.settings.ratedTBWOverride = value
+        } else {
+            customTBWString = appState.settings.ratedTBWOverride.map { String(format: "%.0f", $0) } ?? ""
+            return
+        }
+        appState.recalculateForecast()
     }
 
     // MARK: - Section 3: Driver & Mock Simulation
@@ -263,7 +338,7 @@ public struct SettingsView: View {
             if let msg = exportStatusMessage {
                 Text(msg)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.green)
+                    .foregroundColor(exportIsError ? .red : .green)
                     .transition(.opacity)
             }
         }
@@ -290,7 +365,8 @@ public struct SettingsView: View {
                 .controlSize(.small)
 
                 Button("Reset Defaults") {
-                    appState.settings.resetToDefaults()
+                    appState.resetSettingsToDefaults()
+                    customTBWString = ""
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -300,48 +376,17 @@ public struct SettingsView: View {
 
     // MARK: - Export File Actions
 
-    private func exportJSONAction() {
-        do {
-            let json = try appState.exportJSON()
-            saveToFile(content: json, defaultName: "SSDHealth_Export_\(dateStamp()).json")
-        } catch {
-            exportStatusMessage = "Export failed: \(error.localizedDescription)"
+    private func exportJSONAction() { runExport(.json) }
+
+    private func exportCSVAction() { runExport(.csv) }
+
+    private func exportTextReportAction() { runExport(.textReport) }
+
+    private func runExport(_ kind: ExportKind) {
+        if let result = ExportPanel.run(kind, appState: appState) {
+            exportStatusMessage = result.message
+            exportIsError = result.isError
         }
-    }
-
-    private func exportCSVAction() {
-        do {
-            let csv = try appState.exportCSV()
-            saveToFile(content: csv, defaultName: "SSDHealth_History_\(dateStamp()).csv")
-        } catch {
-            exportStatusMessage = "Export failed: \(error.localizedDescription)"
-        }
-    }
-
-    private func exportTextReportAction() {
-        let report = appState.exportTextReport()
-        saveToFile(content: report, defaultName: "SSDHealth_DiagnosticReport_\(dateStamp()).txt")
-    }
-
-    private func saveToFile(content: String, defaultName: String) {
-        let savePanel = NSSavePanel()
-        savePanel.canCreateDirectories = true
-        savePanel.nameFieldStringValue = defaultName
-
-        if savePanel.runModal() == .OK, let url = savePanel.url {
-            do {
-                try content.write(to: url, atomically: true, encoding: .utf8)
-                exportStatusMessage = "Successfully exported to \(url.lastPathComponent)"
-            } catch {
-                exportStatusMessage = "Save error: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func dateStamp() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyyMMdd_HHmmss"
-        return f.string(from: Date())
     }
 }
 

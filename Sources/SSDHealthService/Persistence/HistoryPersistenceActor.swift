@@ -93,7 +93,11 @@ public actor HistoryPersistenceActor: HistoryPersistenceProtocol {
             self.ratedTBW = document.ratedTBW
             return document
         } catch {
-            // If decoding corrupted JSON fails, fallback gracefully to a fresh document while logging
+            // Keep the unreadable file for recovery instead of overwriting it on the next record
+            let backupURL = fileURL.deletingLastPathComponent()
+                .appendingPathComponent("history.corrupt-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8)).json")
+            try? FileManager.default.moveItem(at: fileURL, to: backupURL)
+
             let fallback = SSDHistoryStoreDocument(
                 driveIdentifier: driveIdentifier,
                 firstRecorded: Date(),

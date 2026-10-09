@@ -24,6 +24,13 @@ public struct DashboardView: View {
         } detail: {
             // Detail Content
             VStack(spacing: 0) {
+                if appState.isFallbackData || appState.settings.useMockReader {
+                    dataSourceBanner
+                }
+                if let error = appState.errorMessage {
+                    readErrorBanner(error)
+                }
+
                 switch appState.selectedTab {
                 case .overview:
                     overviewView
@@ -43,6 +50,40 @@ public struct DashboardView: View {
             }
         }
         .frame(minWidth: 800, minHeight: 560)
+    }
+
+    // MARK: - Data Source Banner
+
+    /// Warns that the shown values are not live SMART data and are excluded from history and alerts.
+    private var dataSourceBanner: some View {
+        let isDemo = appState.settings.useMockReader
+        return HStack(spacing: 8) {
+            Image(systemName: isDemo ? "testtube.2" : "exclamationmark.triangle.fill")
+            Text(isDemo
+                 ? "Demo data active. Values are simulated and are not recorded to history or alerts."
+                 : "SMART access unavailable. Health, temperature and spare values are placeholders; history, forecast and alerts are paused.")
+                .font(.system(size: 12, weight: .medium))
+            Spacer()
+        }
+        .foregroundColor(.orange)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.12))
+    }
+
+    /// Last read failed; values shown below are from the previous successful read, if any.
+    private func readErrorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "xmark.octagon.fill")
+            Text(appState.currentMetrics == nil ? "Telemetry read failed: \(message)" : "Last refresh failed, showing previous reading: \(message)")
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(2)
+            Spacer()
+        }
+        .foregroundColor(.red)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.red.opacity(0.10))
     }
 
     // MARK: - Overview Tab View
@@ -303,13 +344,13 @@ public struct DashboardView: View {
 
             Menu {
                 Button("Export JSON Telemetry...") {
-                    appState.selectedTab = .settings
+                    ExportPanel.run(.json, appState: appState)
                 }
                 Button("Export CSV Time Series...") {
-                    appState.selectedTab = .settings
+                    ExportPanel.run(.csv, appState: appState)
                 }
                 Button("Export Diagnostic Report...") {
-                    appState.selectedTab = .settings
+                    ExportPanel.run(.textReport, appState: appState)
                 }
             } label: {
                 Label("Export", systemImage: "square.and.arrow.up")

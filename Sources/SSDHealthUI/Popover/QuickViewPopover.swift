@@ -28,6 +28,13 @@ public struct QuickViewPopover: View {
             // MARK: - Core Telemetry Grid
             if let metrics = appState.currentMetrics {
                 metricsSection(metrics: metrics)
+                if let error = appState.errorMessage {
+                    Label("Last refresh failed: \(error)", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(.orange)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             } else if appState.isLoading {
                 loadingSection
             } else if let error = appState.errorMessage {
@@ -103,13 +110,26 @@ public struct QuickViewPopover: View {
             // Row 1: Health Gauge + Temperature Card
             HStack(spacing: 12) {
                 // Circular Health Gauge
-                CircularGaugeView(
-                    score: metrics.healthScorePercent,
-                    size: 96,
-                    lineWidth: 10,
-                    subtitle: "\(metrics.wearPercentage)% Wear"
-                )
-                .frame(width: 100)
+                if metrics.isFallbackData {
+                    // Placeholder health would read as a real 100%
+                    VStack(spacing: 4) {
+                        Image(systemName: "questionmark.circle")
+                            .font(.system(size: 34))
+                            .foregroundColor(.secondary)
+                        Text("Health N/A")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(width: 100, height: 96)
+                } else {
+                    CircularGaugeView(
+                        score: metrics.healthScorePercent,
+                        size: 96,
+                        lineWidth: 10,
+                        subtitle: "\(metrics.wearPercentage)% Wear"
+                    )
+                    .frame(width: 100)
+                }
 
                 // Temperature Telemetry Card
                 VStack(alignment: .leading, spacing: 6) {
@@ -117,17 +137,20 @@ public struct QuickViewPopover: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.secondary)
 
-                    Text(appState.settings.temperatureUnit.format(celsius: metrics.temperatureCelsius))
-                        .font(.system(size: 18, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundColor(temperatureColor(metrics.temperatureCelsius))
-
-                    temperatureStatusBadge(celsius: metrics.temperatureCelsius)
-
                     if metrics.isFallbackData {
-                        Text("Fallback Telemetry")
+                        Text("N/A")
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .foregroundColor(.secondary)
+                        Text("SMART unavailable")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundColor(.orange)
+                    } else {
+                        Text(appState.settings.temperatureUnit.format(celsius: metrics.temperatureCelsius))
+                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundColor(temperatureColor(metrics.temperatureCelsius))
+
+                        temperatureStatusBadge(celsius: metrics.temperatureCelsius)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

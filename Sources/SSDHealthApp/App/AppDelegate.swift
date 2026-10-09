@@ -41,9 +41,22 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         manager.setup(appState: state)
         self.menuBarManager = manager
 
-        // Wire reactive state observation to menu bar updates
-        state.onStateChange = { [weak self] in
-            self?.menuBarManager?.updateMenuBarButton()
+        // Menu bar refresh on state change is wired by MenuBarManager.setup(appState:)
+
+        // Route notification clicks and actions to the matching dashboard tab
+        state.notificationService.onNotificationResponse = { [weak self] action, category in
+            let tab: DashboardTab
+            switch (action, category) {
+            case ("ACTION_VIEW_THERMAL", _), (_, NotificationService.categoryThermal):
+                tab = .charts
+            case ("ACTION_VIEW_FORECAST", _), (_, NotificationService.categoryWearMilestone):
+                tab = .forecast
+            default:
+                tab = .smartTable
+            }
+            Task { @MainActor in
+                self?.menuBarManager?.openDashboardWindow(selectedTab: tab)
+            }
         }
 
         // Request notification authorization on launch

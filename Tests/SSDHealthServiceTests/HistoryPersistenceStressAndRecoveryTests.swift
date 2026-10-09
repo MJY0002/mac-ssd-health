@@ -245,6 +245,24 @@ final class HistoryPersistenceStressAndRecoveryTests: XCTestCase {
         }
     }
 
+    func testCorruptedFile_IsBackedUpBeforeBeingReplaced() async throws {
+        let dir = tempDirectoryURL.appendingPathComponent("backup_case", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fileURL = dir.appendingPathComponent("history.json")
+        let original = Data("{\"schemaVersion\": 1, \"snapshots\": [".utf8)
+        try original.write(to: fileURL, options: .atomic)
+
+        let actor = HistoryPersistenceActor(storageURL: fileURL, driveIdentifier: "backup", ratedTBW: 300.0)
+        _ = try await actor.loadHistory()
+        try await actor.record(snapshot: makeSnapshot(offsetSeconds: 0, tbw: 1.0), relativeTo: baseDate)
+
+        let backups = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasPrefix("history.corrupt-") }
+        XCTAssertEqual(backups.count, 1)
+        let backupData = try Data(contentsOf: dir.appendingPathComponent(backups[0]))
+        XCTAssertEqual(backupData, original, "Unreadable history must be preserved byte-for-byte")
+    }
+
     // MARK: - 5. Purge and Multi-Drive Persistence Isolation
 
     func testMultiDrive_PersistenceIsolation_IndependentFilesAndPurges() async throws {

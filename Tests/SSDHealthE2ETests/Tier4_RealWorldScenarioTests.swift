@@ -1,6 +1,8 @@
 import Foundation
 import XCTest
 @testable import SSDHealthCore
+@testable import SSDHealthService
+@testable import SSDHealthUI
 
 /// Tier 4: Real-World Scenario Simulation Test Suite.
 /// End-to-end multi-step workflow verification across realistic user conditions.

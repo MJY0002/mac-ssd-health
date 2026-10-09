@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import UserNotifications
 @testable import SSDHealthCore
 @testable import SSDHealthService
 
@@ -187,5 +188,13 @@ final class NotificationServiceTests: XCTestCase {
         XCTAssertTrue(AlertSeverity.info < AlertSeverity.warning)
         XCTAssertTrue(AlertSeverity.warning < AlertSeverity.critical)
         XCTAssertTrue(AlertSeverity.critical < AlertSeverity.emergency)
+    }
+
+    /// The delegate methods are optional ObjC requirements: a signature that drifts from the SDK
+    /// compiles fine but is silently never called. Check the selectors are actually implemented.
+    func test_DelegateMethods_MatchSDKSelectors() {
+        let service = NotificationService(cooldownManager: AlertCooldownManager(userDefaults: nil), notificationCenter: nil)
+        XCTAssertTrue(service.responds(to: #selector(UNUserNotificationCenterDelegate.userNotificationCenter(_:willPresent:withCompletionHandler:))))
+        XCTAssertTrue(service.responds(to: #selector(UNUserNotificationCenterDelegate.userNotificationCenter(_:didReceive:withCompletionHandler:))))
     }
 }

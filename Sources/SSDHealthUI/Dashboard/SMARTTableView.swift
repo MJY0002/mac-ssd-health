@@ -74,14 +74,8 @@ public struct SMARTTableView: View {
     }
 
     public var allRows: [SMARTParameterRow] {
+        // No raw log means SMART is unreachable; never show synthesized values as hardware data
         guard let log = appState.rawSmartLog else {
-            // Fallback rows from metrics if log is nil
-            if let metrics = appState.currentMetrics {
-                let synData = MockSSDStorageReader.generateSyntheticRawData(for: metrics)
-                if let synLog = NVMESmartLog(data: synData) {
-                    return buildRows(from: synLog)
-                }
-            }
             return []
         }
         return buildRows(from: log)
@@ -225,9 +219,11 @@ public struct SMARTTableView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 32))
                 .foregroundColor(.secondary)
-            Text("No SMART Parameters Found")
+            Text(appState.rawSmartLog == nil ? "SMART Log Unavailable" : "No SMART Parameters Found")
                 .font(.system(size: 14, weight: .semibold))
-            Text("Try changing search keywords or resetting the status filter.")
+            Text(appState.rawSmartLog == nil
+                 ? "The NVMe SMART log could not be read from the drive."
+                 : "Try changing search keywords or resetting the status filter.")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
         }
@@ -238,6 +234,9 @@ public struct SMARTTableView: View {
 
     public func buildRows(from log: NVMESmartLog) -> [SMARTParameterRow] {
         var rows: [SMARTParameterRow] = []
+        let warnC = appState.settings.thermalWarningThresholdCelsius
+        let critC = appState.settings.thermalCriticalThresholdCelsius
+        let wearWarn = appState.settings.wearWarningThresholdPercent
 
         // 1. Critical Warning
         rows.append(SMARTParameterRow(
@@ -256,7 +255,7 @@ public struct SMARTTableView: View {
             rawHex: String(format: "0x%04X", log.compositeTemperatureKelvin),
             rawValueString: "\(log.compositeTemperatureKelvin) K",
             formattedValue: String(format: "%.1f °C (%.1f °F)", log.temperatureCelsius, log.temperatureFahrenheit),
-            status: log.temperatureCelsius >= 65.0 ? .critical : (log.temperatureCelsius >= 55.0 ? .warning : .normal)
+            status: log.temperatureCelsius >= critC ? .critical : (log.temperatureCelsius >= warnC ? .warning : .normal)
         ))
 
         // 3. Available Spare
@@ -286,7 +285,7 @@ public struct SMARTTableView: View {
             rawHex: String(format: "0x%02X", log.percentageUsed),
             rawValueString: "\(log.percentageUsed)%",
             formattedValue: "\(log.percentageUsed)% Used (\(log.healthScorePercent)% Health)",
-            status: log.percentageUsed >= 90 ? .critical : (log.percentageUsed >= 80 ? .warning : .normal)
+            status: log.percentageUsed >= 90 ? .critical : (Int(log.percentageUsed) >= wearWarn ? .warning : .normal)
         ))
 
         // 6. Data Units Read
@@ -420,7 +419,7 @@ public struct SMARTTableView: View {
                     rawHex: String(format: "0x%04X", sK),
                     rawValueString: "\(sK) K",
                     formattedValue: String(format: "%.1f °C", sC),
-                    status: sC >= 65.0 ? .critical : (sC >= 55.0 ? .warning : .normal)
+                    status: sC >= critC ? .critical : (sC >= warnC ? .warning : .normal)
                 ))
             }
         }

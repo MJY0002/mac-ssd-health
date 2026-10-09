@@ -272,6 +272,59 @@ final class AdversarialNotificationAndExportTests: XCTestCase {
         // Next poll with 2 errors (device reset / new drive): decrease, should not trigger
         let a4 = service.evaluateAlertEvents(metrics: makeMetrics(mediaErrors: 2), now: t0.addingTimeInterval(180))
         XCTAssertTrue(a4.isEmpty)
+
+        // After the decrease the baseline is rebased, so 2 -> 4 must alert even though 4 < 7
+        XCTAssertEqual(cooldownManager.lastMediaErrorCount(), 2)
+        let a5 = service.evaluateAlertEvents(metrics: makeMetrics(mediaErrors: 4), now: t0.addingTimeInterval(240))
+        XCTAssertEqual(a5.map { $0.ruleKey }, ["media_errors"])
+    }
+
+    func testMediaErrors_BaselineIsPerDrive() {
+        let cooldownManager = AlertCooldownManager(userDefaults: nil)
+        let service = NotificationService(cooldownManager: cooldownManager, notificationCenter: nil)
+        let t0 = baseDate!
+
+        _ = service.evaluateAlertEvents(metrics: makeMetrics(serialNumber: "DRIVE-A", mediaErrors: 9), now: t0)
+
+        // Replacement drive already has 3 errors: fewer than A, but still news about this drive
+        let swapped = service.evaluateAlertEvents(metrics: makeMetrics(serialNumber: "DRIVE-B", mediaErrors: 3), now: t0.addingTimeInterval(60))
+        XCTAssertEqual(swapped.map { $0.ruleKey }, ["media_errors"])
+        XCTAssertEqual(cooldownManager.lastMediaErrorDriveID(), "DRIVE-B")
+
+        // Same drive, unchanged count: silent
+        let steady = service.evaluateAlertEvents(metrics: makeMetrics(serialNumber: "DRIVE-B", mediaErrors: 3), now: t0.addingTimeInterval(120))
+        XCTAssertTrue(steady.filter { $0.ruleKey == "media_errors" }.isEmpty)
+    }
+
+    func testAlertState_DecodesPersistedStateWithoutDriveID() throws {
+        let legacy = Data(#"{"lastTriggeredTimestamps":{},"lastAcknowledgedMilestones":[80],"lastMediaErrors":4}"#.utf8)
+        let state = try JSONDecoder().decode(AlertState.self, from: legacy)
+        XCTAssertEqual(state.lastMediaErrors, 4)
+        XCTAssertNil(state.lastMediaErrorsDriveID)
+    }
+
+    func testWearMilestones_FollowUserWarningThreshold() {
+        let cooldownManager = AlertCooldownManager(userDefaults: nil)
+        let service = NotificationService(cooldownManager: cooldownManager, notificationCenter: nil)
+        let t0 = baseDate!
+
+        // Threshold 70: first milestone fires at 70, not at 80
+        let a70 = service.evaluateAlertEvents(metrics: makeMetrics(wearPercentage: 72), wearWarnThreshold: 70, now: t0)
+        XCTAssertEqual(a70.filter { $0.ruleKey.hasPrefix("wear_m_") }.map { $0.ruleKey }, ["wear_m_70"])
+    }
+
+    func testExtremeTemperature_RespectsHigherUserCriticalThreshold() {
+        let cooldownManager = AlertCooldownManager(userDefaults: nil)
+        let service = NotificationService(cooldownManager: cooldownManager, notificationCenter: nil)
+
+        // User critical at 75: 72 C is only a warning, not an emergency
+        let events = service.evaluateAlertEvents(
+            metrics: makeMetrics(temperatureCelsius: 72.0),
+            tempWarnThreshold: 70.0,
+            tempCritThreshold: 75.0,
+            now: baseDate!
+        )
+        XCTAssertEqual(events.filter { $0.ruleKey.hasPrefix("temp") }.map { $0.ruleKey }, ["temp_warn"])
     }
 
     func testConcurrentBurstEvaluations_ThreadSafety_NoRaceCondition() {

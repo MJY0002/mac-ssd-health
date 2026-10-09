@@ -20,15 +20,7 @@ public final class ForecastEngine: ForecastEngineProtocol, Sendable {
         ratedTBW: Double?,
         referenceDate: Date
     ) -> SSDForecastResult {
-        // Resolve effective rated TBW (defaulting to 0.6 TBW per GB of drive capacity, or 300.0 TBW fallback)
-        let effectiveRatedTBW: Double
-        if let userTBW = ratedTBW, userTBW > 0 {
-            effectiveRatedTBW = userTBW
-        } else if current.capacityBytes > 0 {
-            effectiveRatedTBW = (Double(current.capacityBytes) / 1_000_000_000.0) * 0.6
-        } else {
-            effectiveRatedTBW = 300.0
-        }
+        let effectiveRatedTBW = Self.effectiveRatedTBW(for: current, override: ratedTBW)
 
         let sortedHistory = history.sorted { $0.timestamp < $1.timestamp }
 
@@ -58,7 +50,11 @@ public final class ForecastEngine: ForecastEngineProtocol, Sendable {
         if sortedHistory.count >= 2, let first = sortedHistory.first, let last = sortedHistory.last {
             let wearDelta = Double(last.wearPercentage - first.wearPercentage)
             let timeDeltaSec = last.timestamp.timeIntervalSince(first.timestamp)
-            if wearDelta >= 1.0 && timeDeltaSec >= 3600.0 {
+            // percentageUsed is an integer, so a delta of 1 carries up to 100% quantization error.
+            // Only trust it once the delta is large enough or spread over a long enough window.
+            let isSignificant = (wearDelta >= 2.0 && timeDeltaSec >= 86_400.0) ||
+                (wearDelta >= 1.0 && timeDeltaSec >= 30.0 * 86_400.0)
+            if isSignificant {
                 let dailyWear = (wearDelta / timeDeltaSec) * 86_400.0
                 if dailyWear > 0 {
                     daysRemaining = max(0.0, Double(100 - current.wearPercentage)) / dailyWear
@@ -96,11 +92,14 @@ public final class ForecastEngine: ForecastEngineProtocol, Sendable {
         // 4. Degradation Status Classification
         let status: DegradationStatus
         let totalSpan = (sortedHistory.last?.timestamp.timeIntervalSince(sortedHistory.first?.timestamp ?? referenceDate)) ?? 0
-        if sortedHistory.count < 3 || totalSpan < 86_400.0 {
-            status = .insufficientData
-        } else if current.wearPercentage >= 100 || current.terabytesWritten >= effectiveRatedTBW {
+        // Wear reported by the drive itself is authoritative and must never hide behind "Collecting Data"
+        if current.wearPercentage >= 100 || current.terabytesWritten >= effectiveRatedTBW {
             status = .exceededEndurance
-        } else if current.wearPercentage >= 90 || daysRemaining < 90.0 {
+        } else if current.wearPercentage >= 90 {
+            status = .criticalWear
+        } else if sortedHistory.count < 3 || totalSpan < 86_400.0 {
+            status = .insufficientData
+        } else if daysRemaining < 90.0 {
             status = .criticalWear
         } else if daysRemaining < (2.0 * 365.25) || primaryRateGB > 200.0 {
             status = .acceleratedWear
@@ -140,6 +139,24 @@ public final class ForecastEngine: ForecastEngineProtocol, Sendable {
         ratedTBW: Double?
     ) -> SSDForecastResult {
         calculateForecast(current: current, history: history, ratedTBW: ratedTBW, referenceDate: Date())
+    }
+
+    /// Resolves the endurance budget used for TBW extrapolation.
+    ///
+    /// Priority: user override, then endurance implied by the drive's own wear counter
+    /// (`TBW * 100 / percentageUsed`, once wear is high enough to be meaningful), then a
+    /// capacity-based guess (0.6 TBW per GB), then 300 TBW.
+    public static func effectiveRatedTBW(for metrics: SSDHealthMetrics, override: Double?) -> Double {
+        if let userTBW = override, userTBW > 0 {
+            return userTBW
+        }
+        if metrics.wearPercentage >= 3 && metrics.terabytesWritten > 0 {
+            return metrics.terabytesWritten * 100.0 / Double(metrics.wearPercentage)
+        }
+        if metrics.capacityBytes > 0 {
+            return (Double(metrics.capacityBytes) / 1_000_000_000.0) * 0.6
+        }
+        return 300.0
     }
 
     // MARK: - Private Regression Helpers

@@ -166,6 +166,39 @@ final class ForecastEngineTests: XCTestCase {
         XCTAssertNotNil(forecast.estimatedExhaustionDate)
     }
 
+    func test_ModelA_IgnoresSinglePercentTickOverShortWindow() {
+        // 9% -> 10% one hour apart is integer rounding, not 24%/day of wear
+        let history = [
+            SSDHistorySnapshot(timestamp: baseDate.addingTimeInterval(-2 * 86_400), healthScorePercent: 91, wearPercentage: 9, temperatureCelsius: 38.0, terabytesWritten: 20.00, availableSparePercent: 100),
+            SSDHistorySnapshot(timestamp: baseDate.addingTimeInterval(-86_400), healthScorePercent: 91, wearPercentage: 9, temperatureCelsius: 38.0, terabytesWritten: 20.02, availableSparePercent: 100),
+            SSDHistorySnapshot(timestamp: baseDate, healthScorePercent: 90, wearPercentage: 10, temperatureCelsius: 38.0, terabytesWritten: 20.04, availableSparePercent: 100)
+        ]
+        let metrics = makeMetrics(wearPercentage: 10, terabytesWritten: 20.04, powerOnHours: 3000)
+        let forecast = engine.calculateForecast(current: metrics, history: history, ratedTBW: 300.0, referenceDate: baseDate)
+
+        XCTAssertNotEqual(forecast.degradationStatus, .criticalWear)
+        XCTAssertGreaterThan(forecast.estimatedDaysRemaining, 365.0)
+    }
+
+    func test_HighWear_IsReportedEvenWithoutHistory() {
+        let worn = makeMetrics(wearPercentage: 100, terabytesWritten: 150.0)
+        XCTAssertEqual(engine.calculateForecast(current: worn, history: [], ratedTBW: 300.0, referenceDate: baseDate).degradationStatus, .exceededEndurance)
+
+        let nearlyWorn = makeMetrics(wearPercentage: 93, terabytesWritten: 150.0)
+        XCTAssertEqual(engine.calculateForecast(current: nearlyWorn, history: [], ratedTBW: 300.0, referenceDate: baseDate).degradationStatus, .criticalWear)
+    }
+
+    func test_EffectiveRatedTBW_DerivedFromDriveWearCounter() {
+        // 40 TB written at 20% wear implies ~200 TB endurance, regardless of capacity guess
+        let metrics = makeMetrics(capacityBytes: 2_000_000_000_000, wearPercentage: 20, terabytesWritten: 40.0)
+        XCTAssertEqual(ForecastEngine.effectiveRatedTBW(for: metrics, override: nil), 200.0, accuracy: 0.001)
+        XCTAssertEqual(ForecastEngine.effectiveRatedTBW(for: metrics, override: 600.0), 600.0, accuracy: 0.001)
+
+        // Below 3% wear the counter is too coarse; fall back to capacity (0.6 TBW per GB)
+        let fresh = makeMetrics(capacityBytes: 2_000_000_000_000, wearPercentage: 1, terabytesWritten: 3.0)
+        XCTAssertEqual(ForecastEngine.effectiveRatedTBW(for: fresh, override: nil), 1200.0, accuracy: 0.001)
+    }
+
     func test_ModelB_TBWEnduranceExtrapolation_WhenWearIsUnchanged() {
         var history: [SSDHistorySnapshot] = []
         // 10 days of 20 GB/day writes with unchanged 2% wear

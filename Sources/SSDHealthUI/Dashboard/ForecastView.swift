@@ -89,9 +89,9 @@ public struct ForecastView: View {
             MetricCardView(
                 title: "Estimated Lifespan",
                 value: forecast?.lifespanFormatted ?? "Estimating...",
-                subtitle: forecast?.estimatedDaysRemaining != nil && !(forecast?.estimatedDaysRemaining.isInfinite ?? true) ? "\(Int(forecast!.estimatedDaysRemaining)) Days Remaining" : "Projected Remaining Time",
+                subtitle: daysRemainingSubtitle,
                 systemImage: "hourglass",
-                statusColor: forecast?.degradationStatus == .criticalWear ? .red : (forecast?.degradationStatus == .stable ? .green : .orange)
+                statusColor: lifespanColor
             )
 
             MetricCardView(
@@ -117,6 +117,24 @@ public struct ForecastView: View {
                 systemImage: "chart.line.uptrend.xyaxis",
                 statusColor: .secondary
             )
+        }
+    }
+
+    /// Only show a day count within the range the lifespan text itself treats as finite (<= 100 years);
+    /// `Int(_:)` would trap on huge finite values from near-zero write rates.
+    private var daysRemainingSubtitle: String {
+        guard let days = forecast?.estimatedDaysRemaining, days.isFinite, days >= 0, days <= 100 * 365.25 else {
+            return "Projected Remaining Time"
+        }
+        return "\(Int(days)) Days Remaining"
+    }
+
+    private var lifespanColor: Color {
+        switch forecast?.degradationStatus {
+        case .criticalWear, .exceededEndurance: return .red
+        case .acceleratedWear, .moderateWear: return .orange
+        case .stable: return .green
+        default: return .secondary
         }
     }
 
@@ -207,7 +225,7 @@ public struct ForecastView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(#"Model B: Rated TBW Endurance (Remaining TBW / Daily TBW Rate)"#)
                             .font(.system(size: 12, weight: .semibold))
-                        Text("Manufacturer rated write endurance (e.g. 0.6 TBW per GB) combined with active OLS regression daily write throughput.")
+                        Text("Write endurance (your override, else derived from the drive's own wear counter, else ~0.6 TBW per GB of capacity) divided by the OLS regression daily write throughput.")
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
                     }
