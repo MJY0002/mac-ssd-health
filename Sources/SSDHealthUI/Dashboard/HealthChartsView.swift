@@ -184,7 +184,7 @@ public struct HealthChartsView: View {
 
     private var wearProgressionChart: some View {
         Chart {
-            ForEach(filteredSamples) { sample in
+            ForEach(Array(filteredSamples.enumerated()), id: \.offset) { _, sample in
                 AreaMark(
                     x: .value("Timestamp", sample.timestamp),
                     y: .value("Wear", sample.wearPercentage)
@@ -217,7 +217,7 @@ public struct HealthChartsView: View {
                 .foregroundStyle(.orange.opacity(0.7))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                 .annotation(position: .top, alignment: .leading) {
-                    Text("Warning (80%)")
+                    Text("Warning (\(appState.settings.wearWarningThresholdPercent)%)")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundColor(.orange)
                 }
@@ -233,6 +233,7 @@ public struct HealthChartsView: View {
                 }
         }
         .chartYScale(domain: 0...max(105, (filteredSamples.map(\.wearPercentage).max() ?? 0) + 10))
+        .chartXSelection(value: $hoveredTimestamp)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 6)) { value in
                 AxisGridLine()
@@ -247,7 +248,7 @@ public struct HealthChartsView: View {
 
     private var tbwAccumulationChart: some View {
         Chart {
-            ForEach(filteredSamples) { sample in
+            ForEach(Array(filteredSamples.enumerated()), id: \.offset) { _, sample in
                 LineMark(
                     x: .value("Timestamp", sample.timestamp),
                     y: .value("TBW", sample.terabytesWritten)
@@ -275,6 +276,7 @@ public struct HealthChartsView: View {
                 .symbolSize(18)
             }
         }
+        .chartXSelection(value: $hoveredTimestamp)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 6)) { value in
                 AxisGridLine()
@@ -289,43 +291,44 @@ public struct HealthChartsView: View {
 
     private var thermalHistoryChart: some View {
         Chart {
-            ForEach(filteredSamples) { sample in
+            ForEach(Array(filteredSamples.enumerated()), id: \.offset) { _, sample in
                 LineMark(
                     x: .value("Timestamp", sample.timestamp),
-                    y: .value("Temperature", sample.temperatureCelsius)
+                    y: .value("Temperature", displayTemperature(sample.temperatureCelsius))
                 )
                 .foregroundStyle(.mint)
                 .lineStyle(StrokeStyle(lineWidth: 2))
 
                 PointMark(
                     x: .value("Timestamp", sample.timestamp),
-                    y: .value("Temperature", sample.temperatureCelsius)
+                    y: .value("Temperature", displayTemperature(sample.temperatureCelsius))
                 )
                 .foregroundStyle(sample.temperatureCelsius >= appState.settings.thermalCriticalThresholdCelsius ? .red : (sample.temperatureCelsius >= appState.settings.thermalWarningThresholdCelsius ? .orange : .mint))
                 .symbolSize(22)
             }
 
             // Warning Temperature Rule (60°C)
-            RuleMark(y: .value("Warning Temp", appState.settings.thermalWarningThresholdCelsius))
+            RuleMark(y: .value("Warning Temp", displayTemperature(appState.settings.thermalWarningThresholdCelsius)))
                 .foregroundStyle(.orange.opacity(0.7))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                 .annotation(position: .top, alignment: .leading) {
-                    Text("Warn (\(Int(appState.settings.thermalWarningThresholdCelsius))°C)")
+                    Text("Warn (\(appState.settings.temperatureUnit.formatRounded(celsius: appState.settings.thermalWarningThresholdCelsius)))")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundColor(.orange)
                 }
 
             // Critical Temperature Rule (65°C)
-            RuleMark(y: .value("Critical Temp", appState.settings.thermalCriticalThresholdCelsius))
+            RuleMark(y: .value("Critical Temp", displayTemperature(appState.settings.thermalCriticalThresholdCelsius)))
                 .foregroundStyle(.red.opacity(0.7))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                 .annotation(position: .top, alignment: .leading) {
-                    Text("Crit (\(Int(appState.settings.thermalCriticalThresholdCelsius))°C)")
+                    Text("Crit (\(appState.settings.temperatureUnit.formatRounded(celsius: appState.settings.thermalCriticalThresholdCelsius)))")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundColor(.red)
                 }
         }
-        .chartYScale(domain: 20...max(80, (filteredSamples.map(\.temperatureCelsius).max() ?? 60.0) + 10.0))
+        .chartYScale(domain: thermalDomain)
+        .chartXSelection(value: $hoveredTimestamp)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 6)) { value in
                 AxisGridLine()
@@ -334,6 +337,18 @@ public struct HealthChartsView: View {
             }
         }
         .frame(height: 280)
+    }
+
+    private func displayTemperature(_ celsius: Double) -> Double {
+        appState.settings.temperatureUnit == .fahrenheit ? celsius * 1.8 + 32.0 : celsius
+    }
+
+    /// Y range in display units, wide enough for every sample and both threshold lines.
+    private var thermalDomain: ClosedRange<Double> {
+        let temps = filteredSamples.map(\.temperatureCelsius)
+        let lowC = min(20.0, (temps.min() ?? 20.0) - 5.0)
+        let highC = max(80.0, (temps.max() ?? 60.0) + 10.0, appState.settings.thermalCriticalThresholdCelsius + 5.0)
+        return displayTemperature(lowC)...displayTemperature(highC)
     }
 
     // MARK: - Empty State

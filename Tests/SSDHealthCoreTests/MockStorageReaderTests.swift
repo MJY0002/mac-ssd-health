@@ -179,4 +179,19 @@ final class MockStorageReaderTests: XCTestCase {
         XCTAssertTrue(metrics.capacityFormatted.contains("500"))
         XCTAssertTrue(metrics.isHealthy)
     }
+
+    func testSyntheticRawData_NonFiniteAndNegativeInputs_DoNotTrap() {
+        let metrics = SSDHealthMetrics(
+            bsdName: "disk0", modelName: "X", serialNumber: "S", firmwareRevision: "R",
+            interconnect: "Apple Fabric", capacityBytes: 1, healthScorePercent: 50, wearPercentage: 50,
+            temperatureCelsius: .nan, availableSparePercent: 100, availableSpareThresholdPercent: 10,
+            terabytesWritten: -5.0, terabytesRead: .infinity, powerOnHours: 1, powerCycles: 1,
+            unsafeShutdowns: 0, mediaErrors: 0, errorLogEntries: 0,
+            criticalWarnings: CriticalWarningFlags(rawValue: 0)
+        )
+        let log = NVMESmartLog(data: MockSSDStorageReader.generateSyntheticRawData(for: metrics))
+        XCTAssertNotNil(log)
+        XCTAssertEqual(log?.compositeTemperatureKelvin, 0)
+        XCTAssertTrue(log?.dataUnitsWritten.isZero ?? false)
+    }
 }

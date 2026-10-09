@@ -254,6 +254,20 @@ public final class AppState: @unchecked Sendable {
         self.onStateChange?()
     }
 
+    /// Resets settings and re-applies the side effects a plain settings reset would skip:
+    /// switching back to the live reader, restarting the poll timer, recomputing the forecast.
+    public func resetSettingsToDefaults() {
+        let wasMock = settings.useMockReader
+        settings.resetToDefaults()
+        if wasMock {
+            toggleMockReader(false)
+        }
+        if isPollingActive {
+            startPollingTimer()
+        }
+        recalculateForecast()
+    }
+
     // MARK: - History Management
 
     public func purgeHistory() async {
@@ -302,6 +316,10 @@ public final class AppState: @unchecked Sendable {
 
     public var menuBarTitle: String {
         guard let m = currentMetrics else { return "--%" }
+        // Fallback health and temperature are placeholders, not measurements
+        if m.isFallbackData {
+            return settings.displayMode == .iconOnly ? "" : "--%"
+        }
 
         let tempStr: String
         if settings.temperatureUnit == .celsius {

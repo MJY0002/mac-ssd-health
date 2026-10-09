@@ -12,6 +12,12 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
 
     public init() {}
 
+    /// SMART page from the most recent `readHealthMetrics()`, so the `readRawSmartLog()` call that
+    /// follows in the same poll reuses it instead of issuing a second hardware command.
+    private let cacheLock = NSLock()
+    private var cachedLog: (log: NVMESmartLog, readAt: Date)?
+    private static let cacheLifetime: TimeInterval = 5.0
+
     // MARK: - Public API
 
     /// Returns `true` if native NVMe SMART UserClient hardware access is currently available.
@@ -26,6 +32,10 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
 
     /// Reads and parses the raw 512-byte NVMe SMART log page directly from hardware.
     public func readRawSmartLog() async throws -> NVMESmartLog {
+        if let cached = cacheLock.withLock({ cachedLog }),
+           Date().timeIntervalSince(cached.readAt) < Self.cacheLifetime {
+            return cached.log
+        }
         let raw = try readRawBytesFromHardware()
         guard let log = NVMESmartLog(data: raw.data) else {
             throw StorageReaderError.invalidDataLength(expected: 512, actual: raw.data.count)
@@ -40,6 +50,8 @@ public final class IOKitStorageReader: SSDStorageReading, @unchecked Sendable {
             guard let log = NVMESmartLog(data: raw.data) else {
                 throw StorageReaderError.invalidDataLength(expected: 512, actual: raw.data.count)
             }
+            cacheLock.withLock { cachedLog = (log, Date()) }
+
             // Metadata must come from the same device the SMART log was read from
             let registryInfo = try readRegistryMetadata(registryEntryID: raw.registryEntryID)
 

@@ -8,6 +8,7 @@ public struct SettingsView: View {
     @Bindable public var appState: AppState
     @State private var showPurgeConfirmation: Bool = false
     @State private var exportStatusMessage: String?
+    @State private var exportIsError: Bool = false
     @State private var customTBWString: String = ""
 
     public init(appState: AppState) {
@@ -129,8 +130,9 @@ public struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                     HStack {
-                        Slider(value: $appState.settings.thermalWarningThresholdCelsius, in: 40...75, step: 1)
-                        Text("\(Int(appState.settings.thermalWarningThresholdCelsius)) °C")
+                        // Warning must stay below critical
+                        Slider(value: $appState.settings.thermalWarningThresholdCelsius, in: 40...max(41, min(75, appState.settings.thermalCriticalThresholdCelsius - 1)), step: 1)
+                        Text(appState.settings.temperatureUnit.formatRounded(celsius: appState.settings.thermalWarningThresholdCelsius))
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .frame(width: 50, alignment: .trailing)
                     }
@@ -142,8 +144,8 @@ public struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                     HStack {
-                        Slider(value: $appState.settings.thermalCriticalThresholdCelsius, in: 55...90, step: 1)
-                        Text("\(Int(appState.settings.thermalCriticalThresholdCelsius)) °C")
+                        Slider(value: $appState.settings.thermalCriticalThresholdCelsius, in: min(89, max(55, appState.settings.thermalWarningThresholdCelsius + 1))...90, step: 1)
+                        Text(appState.settings.temperatureUnit.formatRounded(celsius: appState.settings.thermalCriticalThresholdCelsius))
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .frame(width: 50, alignment: .trailing)
                     }
@@ -298,7 +300,7 @@ public struct SettingsView: View {
             if let msg = exportStatusMessage {
                 Text(msg)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.green)
+                    .foregroundColor(exportIsError ? .red : .green)
                     .transition(.opacity)
             }
         }
@@ -325,7 +327,8 @@ public struct SettingsView: View {
                 .controlSize(.small)
 
                 Button("Reset Defaults") {
-                    appState.settings.resetToDefaults()
+                    appState.resetSettingsToDefaults()
+                    customTBWString = ""
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -335,48 +338,17 @@ public struct SettingsView: View {
 
     // MARK: - Export File Actions
 
-    private func exportJSONAction() {
-        do {
-            let json = try appState.exportJSON()
-            saveToFile(content: json, defaultName: "SSDHealth_Export_\(dateStamp()).json")
-        } catch {
-            exportStatusMessage = "Export failed: \(error.localizedDescription)"
+    private func exportJSONAction() { runExport(.json) }
+
+    private func exportCSVAction() { runExport(.csv) }
+
+    private func exportTextReportAction() { runExport(.textReport) }
+
+    private func runExport(_ kind: ExportKind) {
+        if let result = ExportPanel.run(kind, appState: appState) {
+            exportStatusMessage = result.message
+            exportIsError = result.isError
         }
-    }
-
-    private func exportCSVAction() {
-        do {
-            let csv = try appState.exportCSV()
-            saveToFile(content: csv, defaultName: "SSDHealth_History_\(dateStamp()).csv")
-        } catch {
-            exportStatusMessage = "Export failed: \(error.localizedDescription)"
-        }
-    }
-
-    private func exportTextReportAction() {
-        let report = appState.exportTextReport()
-        saveToFile(content: report, defaultName: "SSDHealth_DiagnosticReport_\(dateStamp()).txt")
-    }
-
-    private func saveToFile(content: String, defaultName: String) {
-        let savePanel = NSSavePanel()
-        savePanel.canCreateDirectories = true
-        savePanel.nameFieldStringValue = defaultName
-
-        if savePanel.runModal() == .OK, let url = savePanel.url {
-            do {
-                try content.write(to: url, atomically: true, encoding: .utf8)
-                exportStatusMessage = "Successfully exported to \(url.lastPathComponent)"
-            } catch {
-                exportStatusMessage = "Save error: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    private func dateStamp() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyyMMdd_HHmmss"
-        return f.string(from: Date())
     }
 }
 

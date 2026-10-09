@@ -27,6 +27,9 @@ public struct DashboardView: View {
                 if appState.isFallbackData || appState.settings.useMockReader {
                     dataSourceBanner
                 }
+                if let error = appState.errorMessage {
+                    readErrorBanner(error)
+                }
 
                 switch appState.selectedTab {
                 case .overview:
@@ -66,6 +69,21 @@ public struct DashboardView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.12))
+    }
+
+    /// Last read failed; values shown below are from the previous successful read, if any.
+    private func readErrorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "xmark.octagon.fill")
+            Text(appState.currentMetrics == nil ? "Telemetry read failed: \(message)" : "Last refresh failed, showing previous reading: \(message)")
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(2)
+            Spacer()
+        }
+        .foregroundColor(.red)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.red.opacity(0.10))
     }
 
     // MARK: - Overview Tab View
@@ -326,13 +344,13 @@ public struct DashboardView: View {
 
             Menu {
                 Button("Export JSON Telemetry...") {
-                    appState.selectedTab = .settings
+                    ExportPanel.run(.json, appState: appState)
                 }
                 Button("Export CSV Time Series...") {
-                    appState.selectedTab = .settings
+                    ExportPanel.run(.csv, appState: appState)
                 }
                 Button("Export Diagnostic Report...") {
-                    appState.selectedTab = .settings
+                    ExportPanel.run(.textReport, appState: appState)
                 }
             } label: {
                 Label("Export", systemImage: "square.and.arrow.up")

@@ -158,6 +158,20 @@ final class AppStateTests: XCTestCase {
         XCTAssertNil(state.rawSmartLog)
         XCTAssertEqual(state.history.count, 0)
         XCTAssertEqual(cooldown.lastMediaErrorCount(), 0)
+        // Placeholder health must not appear as a real "100%" in the menu bar
+        XCTAssertEqual(state.menuBarTitle, "--%")
+    }
+
+    func testAppState_ResetDefaults_LeavesDemoMode() async throws {
+        let mockReader = MockSSDStorageReader(preset: .healthy)
+        let state = AppState(mockReader: mockReader, persistence: persistenceActor, settings: settings)
+        state.toggleMockReader(true)
+        XCTAssertTrue((state.storageReader as? MockSSDStorageReader) === mockReader)
+
+        state.resetSettingsToDefaults()
+
+        XCTAssertFalse(state.settings.useMockReader)
+        XCTAssertTrue(state.storageReader is IOKitStorageReader, "Demo reader must not keep feeding data after reset")
     }
 
     func testAppState_ConcurrentRefreshes_AreSerialized() async throws {
