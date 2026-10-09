@@ -148,8 +148,8 @@ public final class AppState: @unchecked Sendable {
 
     /// Demo data and registry fallback placeholders must never reach the persisted history
     /// or the persisted alert state, otherwise they corrupt forecasts and suppress real alerts.
-    private func isTrustedTelemetry(_ metrics: SSDHealthMetrics) -> Bool {
-        !settings.useMockReader && !metrics.isFallbackData
+    private func isTrustedTelemetry(_ metrics: SSDHealthMetrics, fromDemoReader: Bool) -> Bool {
+        !fromDemoReader && !metrics.isFallbackData
     }
 
     /// Polling, initial load and manual refresh share this path. Runs are serialized (not dropped),
@@ -165,17 +165,21 @@ public final class AppState: @unchecked Sendable {
     }
 
     private func performFetch(recordSnapshot: Bool) async {
+        // Bind trust to the reader that produced this reading, captured before any await:
+        // toggling demo mode mid-read must not reclassify the result
+        let reader = storageReader
+        let isDemoRead = settings.useMockReader
         do {
             // 1. Read Health Metrics
-            let metrics = try await storageReader.readHealthMetrics()
+            let metrics = try await reader.readHealthMetrics()
             self.currentMetrics = metrics
-            let trusted = isTrustedTelemetry(metrics)
+            let trusted = isTrustedTelemetry(metrics, fromDemoReader: isDemoRead)
 
             // 2. Read Raw SMART Log (nil when unavailable; never show fabricated raw data)
             if metrics.isFallbackData {
                 self.rawSmartLog = nil
             } else {
-                self.rawSmartLog = try? await storageReader.readRawSmartLog()
+                self.rawSmartLog = try? await reader.readRawSmartLog()
             }
 
             // 3. Record snapshot to persistence actor
@@ -194,7 +198,7 @@ public final class AppState: @unchecked Sendable {
             } else {
                 self.forecast = forecastEngine.calculateForecast(
                     current: metrics,
-                    history: settings.useMockReader ? [] : loadedHistory,
+                    history: isDemoRead ? [] : loadedHistory,
                     ratedTBW: settings.ratedTBWOverride
                 )
             }
