@@ -17,6 +17,9 @@ jobs:
           xcodebuild -version
           swift --version
 
+      - name: Storage registry (diagnostics)
+        run: ioreg -r -c IOBlockStorageDevice -l -w0 | grep -E '"(Device|Protocol) Characteristics"|IOBlockStorageDevice|"BSD Name"|"Size"|"Model Number"' | head -40
+
       - name: Build
         run: swift build
 
