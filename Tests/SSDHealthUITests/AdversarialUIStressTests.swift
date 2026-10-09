@@ -472,7 +472,7 @@ final class AdversarialUIStressTests: XCTestCase {
         XCTAssertEqual(tableView.filteredRows.count, 0)
     }
 
-    func testSMARTTable_NilRawLogWithValidMetrics_SynthesizesRows() {
+    func testSMARTTable_NilRawLogWithValidMetrics_ShowsNoFabricatedRows() {
         let metrics = SSDHealthMetrics(
             bsdName: "disk0", modelName: "SSD", serialNumber: "S1", firmwareRevision: "1", interconnect: "PCIe",
             capacityBytes: 500_000_000_000, healthScorePercent: 95, wearPercentage: 5, temperatureCelsius: 36.0,
@@ -485,9 +485,9 @@ final class AdversarialUIStressTests: XCTestCase {
         state.currentMetrics = metrics
         state.rawSmartLog = nil // nil raw log
 
+        // Without a real SMART log the table must stay empty instead of synthesizing values from metrics
         let tableView = SMARTTableView(appState: state)
-        let rows = tableView.allRows
-        XCTAssertGreaterThanOrEqual(rows.count, 17)
+        XCTAssertTrue(tableView.allRows.isEmpty)
     }
 
     func testSMARTTable_AllZerosBuffer_RendersCleanly() {
